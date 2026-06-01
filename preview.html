@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Zwift Stats — Description Preview</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f5f5f5;
+      color: #222;
+      padding: 32px 16px;
+    }
+
+    h1 {
+      font-size: 18px;
+      font-weight: 600;
+      color: #555;
+      text-align: center;
+      margin-bottom: 32px;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+
+    .scenarios {
+      display: grid;
+      gap: 24px;
+      max-width: 720px;
+      margin: 0 auto;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.10);
+      overflow: hidden;
+    }
+
+    .card-header {
+      padding: 14px 20px;
+      background: #fc4c02;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .activity-header {
+      padding: 16px 20px 0;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 16px;
+    }
+
+    .activity-title {
+      font-size: 20px;
+      font-weight: 700;
+      color: #111;
+      margin-bottom: 4px;
+    }
+
+    .activity-meta {
+      font-size: 13px;
+      color: #888;
+    }
+
+    .activity-stats {
+      display: flex;
+      gap: 24px;
+      padding: 14px 20px;
+      border-bottom: 1px solid #eee;
+    }
+
+    .stat-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .stat-value {
+      font-size: 20px;
+      font-weight: 700;
+      color: #222;
+    }
+
+    .stat-label {
+      font-size: 11px;
+      color: #999;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .description {
+      padding: 16px 20px;
+      font-size: 14px;
+      line-height: 1.6;
+      color: #333;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .zwift-separator { color: #999; }
+    .pr { color: #e07b00; font-weight: 600; }
+  </style>
+</head>
+<body>
+
+<h1>Strava Description Preview — Zwift Stats</h1>
+
+<div class="scenarios">
+
+  <!-- Scenario 1: All four PRs -->
+  <div class="card">
+    <div class="card-header">Scenario 1 — All four PRs</div>
+    <div class="activity-header">
+      <div class="activity-title">Zwift - Watopia</div>
+      <div class="activity-meta">Monday, June 1, 2026 at 9:52 AM · Virtual Ride</div>
+    </div>
+    <div class="activity-stats">
+      <div class="stat-item"><span class="stat-value">58.5<small style="font-size:14px">km</small></span><span class="stat-label">Distance</span></div>
+      <div class="stat-item"><span class="stat-value">1:51:19</span><span class="stat-label">Moving Time</span></div>
+      <div class="stat-item"><span class="stat-value">182<small style="font-size:14px">W</small></span><span class="stat-label">Avg Power</span></div>
+    </div>
+    <div class="description"><span class="zwift-separator">--- Zwift Stats ---</span>
+XP: <span class="pr">🏆 2,482</span>  (<span class="pr">🏆 1,338</span>/hr)
+Drops: <span class="pr">🏆 52,385</span>  (<span class="pr">🏆 28,236</span>/hr)</div>
+  </div>
+
+  <!-- Scenario 2: Rate PRs only (short hard effort) -->
+  <div class="card">
+    <div class="card-header">Scenario 2 — Rate PRs only (short hard effort)</div>
+    <div class="activity-header">
+      <div class="activity-title">Zwift - Watopia</div>
+      <div class="activity-meta">Wednesday, June 3, 2026 at 7:15 AM · Virtual Ride</div>
+    </div>
+    <div class="activity-stats">
+      <div class="stat-item"><span class="stat-value">41.2<small style="font-size:14px">km</small></span><span class="stat-label">Distance</span></div>
+      <div class="stat-item"><span class="stat-value">1:10:04</span><span class="stat-label">Moving Time</span></div>
+      <div class="stat-item"><span class="stat-value">195<small style="font-size:14px">W</small></span><span class="stat-label">Avg Power</span></div>
+    </div>
+    <div class="description"><span class="zwift-separator">--- Zwift Stats ---</span>
+XP: 1,820  (<span class="pr">🏆 1,557</span>/hr)
+Drops: 31,400  (<span class="pr">🏆 29,037</span>/hr)</div>
+  </div>
+
+  <!-- Scenario 3: Total PRs only (longest ride ever) -->
+  <div class="card">
+    <div class="card-header">Scenario 3 — Total PRs only (longest ride ever)</div>
+    <div class="activity-header">
+      <div class="activity-title">Zwift - Makuri Islands</div>
+      <div class="activity-meta">Friday, June 5, 2026 at 6:00 AM · Virtual Ride</div>
+    </div>
+    <div class="activity-stats">
+      <div class="stat-item"><span class="stat-value">87.4<small style="font-size:14px">km</small></span><span class="stat-label">Distance</span></div>
+      <div class="stat-item"><span class="stat-value">2:44:10</span><span class="stat-label">Moving Time</span></div>
+      <div class="stat-item"><span class="stat-value">161<small style="font-size:14px">W</small></span><span class="stat-label">Avg Power</span></div>
+    </div>
+    <div class="description"><span class="zwift-separator">--- Zwift Stats ---</span>
+XP: <span class="pr">🏆 3,601</span>  (1,316/hr)
+Drops: <span class="pr">🏆 76,240</span>  (27,874/hr)</div>
+  </div>
+
+  <!-- Scenario 4: No PRs -->
+  <div class="card">
+    <div class="card-header">Scenario 4 — No PRs</div>
+    <div class="activity-header">
+      <div class="activity-title">Zwift - London</div>
+      <div class="activity-meta">Sunday, June 7, 2026 at 8:30 AM · Virtual Ride</div>
+    </div>
+    <div class="activity-stats">
+      <div class="stat-item"><span class="stat-value">29.1<small style="font-size:14px">km</small></span><span class="stat-label">Distance</span></div>
+      <div class="stat-item"><span class="stat-value">0:55:12</span><span class="stat-label">Moving Time</span></div>
+      <div class="stat-item"><span class="stat-value">165<small style="font-size:14px">W</small></span><span class="stat-label">Avg Power</span></div>
+    </div>
+    <div class="description"><span class="zwift-separator">--- Zwift Stats ---</span>
+XP: 1,215  (1,322/hr)
+Drops: 22,800  (24,805/hr)</div>
+  </div>
+
+  <!-- Scenario 5: Appended to an existing description -->
+  <div class="card">
+    <div class="card-header">Scenario 5 — Appended to existing description</div>
+    <div class="activity-header">
+      <div class="activity-title">Morning Z2 ride</div>
+      <div class="activity-meta">Tuesday, June 9, 2026 at 7:00 AM · Virtual Ride</div>
+    </div>
+    <div class="activity-stats">
+      <div class="stat-item"><span class="stat-value">52.3<small style="font-size:14px">km</small></span><span class="stat-label">Distance</span></div>
+      <div class="stat-item"><span class="stat-value">1:38:44</span><span class="stat-label">Moving Time</span></div>
+      <div class="stat-item"><span class="stat-value">172<small style="font-size:14px">W</small></span><span class="stat-label">Avg Power</span></div>
+    </div>
+    <div class="description">Legs feeling great today. Nice easy spin around Watopia, kept HR under 145 the whole way.
+
+<span class="zwift-separator">--- Zwift Stats ---</span>
+XP: 2,104  (1,284/hr)
+Drops: 44,920  (27,416/hr)</div>
+  </div>
+
+</div>
+
+</body>
+</html>

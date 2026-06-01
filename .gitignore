@@ -1,0 +1,16 @@
+node_modules/
+dist/
+
+# Personal ride data
+*.fit
+Log.txt
+Log*.txt
+
+# Auth tokens and config (created by `zwift-stats auth`)
+~/.config/zwift-stats/
+
+# Personal bests database (created at runtime)
+*.db
+
+# macOS
+.DS_Store

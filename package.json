@@ -1,0 +1,33 @@
+{
+  "name": "zwift-stats",
+  "version": "1.0.0",
+  "description": "Auto-annotate Strava activities with Zwift XP and Drops",
+  "main": "src/index.ts",
+  "bin": {
+    "zwift-stats": "./bin/zwift-stats"
+  },
+  "scripts": {
+    "auth": "tsx src/index.ts auth",
+    "start": "tsx src/index.ts start",
+    "process": "tsx src/index.ts process",
+    "daemon:install": "tsx src/index.ts daemon install",
+    "daemon:uninstall": "tsx src/index.ts daemon uninstall",
+    "daemon:status": "tsx src/index.ts daemon status",
+    "build": "tsc"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "better-sqlite3": "^12.10.0",
+    "chokidar": "^3.6.0",
+    "fit-file-parser": "^3.0.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.9.1",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}
