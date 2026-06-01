@@ -33,7 +33,7 @@ export async function processFitFile(fitPath: string, opts: PipelineOptions = {}
   // Parse log for XP and Drops
   const stats = parseLog(fitFileName, opts.logPath);
   if (!stats) {
-    console.log('  Could not find XP/Drops in log — skipping.');
+    console.log('  Could not find valid XP/Drops in log — skipping.');
     return;
   }
 

@@ -146,6 +146,33 @@ export function previewBests(
   };
 }
 
+export function getRides(): RideRecord[] {
+  const rows = db()
+    .prepare('SELECT * FROM rides ORDER BY processed_at ASC')
+    .all() as any[];
+  return rows.map(r => ({
+    fitFile: r.fit_file,
+    stravaActivityId: r.strava_activity_id ?? undefined,
+    processedAt: r.processed_at,
+    xp: r.xp,
+    drops: r.drops,
+    durationSeconds: r.duration_seconds,
+    xpPerHour: r.xp_per_hour,
+    dropsPerHour: r.drops_per_hour,
+  }));
+}
+
+export function getAllBests(): PersonalBest[] {
+  const rows = db().prepare('SELECT * FROM personal_bests').all() as any[];
+  return rows.map(r => ({
+    metric: r.metric as Metric,
+    value: r.value,
+    achievedAt: r.achieved_at,
+    stravaActivityId: r.strava_activity_id ?? undefined,
+    rideName: r.ride_name ?? undefined,
+  }));
+}
+
 export function checkAndUpdateBests(
   xpPerHour: number,
   dropsPerHour: number,

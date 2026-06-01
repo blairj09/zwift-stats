@@ -31,6 +31,26 @@ async function main() {
       break;
     }
 
+    case 'backfill': {
+      const { runBackfill } = await import('./backfill.js');
+      await runBackfill({ dryRun: args.includes('--dry-run') });
+      break;
+    }
+
+    case 'stats': {
+      const { printStats } = await import('./summary.js');
+      printStats();
+      break;
+    }
+
+    case 'chart': {
+      const { generateChart } = await import('./chart.js');
+      const outputFlag = args.indexOf('--output');
+      const outputPath = outputFlag !== -1 ? args[outputFlag + 1] : undefined;
+      generateChart(outputPath);
+      break;
+    }
+
     case 'process': {
       const fitArg = args.find(a => !a.startsWith('--'));
       const dryRun = args.includes('--dry-run');
@@ -64,6 +84,9 @@ Commands:
   auth                           Set up Strava OAuth (run once)
   start                          Start the file-watching daemon
   process <file> [--dry-run]     Manually process a FIT file
+  backfill [--dry-run]           Scan all Zwift logs and process historical rides
+  stats                          Print lifetime XP/Drops summary statistics
+  chart [--output <file>]        Generate charts and open in browser
   daemon install                 Install and start the macOS LaunchAgent
   daemon uninstall               Stop and remove the macOS LaunchAgent
   daemon status                  Check whether the daemon is running
