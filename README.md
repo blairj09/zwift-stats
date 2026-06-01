@@ -66,13 +66,54 @@ That's it. The next time you finish a Zwift ride and hit **Save**, your Strava d
 ## CLI reference
 
 ```bash
-zwift-stats auth                    # One-time Strava OAuth setup
-zwift-stats process <file>          # Manually process a specific .fit file
-zwift-stats process <file> --dry-run  # Preview without updating Strava
-zwift-stats daemon install          # Install and start the background daemon
-zwift-stats daemon uninstall        # Stop and remove the daemon
-zwift-stats daemon status           # Check whether the daemon is running
+zwift-stats auth                        # One-time Strava OAuth setup
+zwift-stats process <file>              # Manually process a specific .fit file
+zwift-stats process <file> --dry-run    # Preview without updating Strava
+zwift-stats backfill                    # Process all historical rides from Zwift logs
+zwift-stats backfill --dry-run          # Preview backfill without saving or updating Strava
+zwift-stats stats                       # Print lifetime XP/Drops summary statistics
+zwift-stats chart                       # Generate charts and open in browser
+zwift-stats chart --output <file>       # Write chart HTML to a specific path
+zwift-stats daemon install              # Install and start the background daemon
+zwift-stats daemon uninstall            # Stop and remove the daemon
+zwift-stats daemon status               # Check whether the daemon is running
 ```
+
+## Backfill
+
+If you installed `zwift-stats` after riding for a while, or if the daemon missed some rides, you can retroactively process historical rides:
+
+```bash
+zwift-stats backfill
+```
+
+This scans all log files in `~/Documents/Zwift/Logs/` (including rotated `Log (old N).txt` files), discovers every completed ride, and processes any not already in the local database. XP and Drops are read from the log file that recorded each session. Rides whose `.fit` files are no longer on disk are skipped gracefully.
+
+## Stats and charts
+
+Two commands let you explore your accumulated XP and Drops history.
+
+`zwift-stats stats` prints a terminal summary:
+
+```
+=== Zwift Stats Summary ===
+
+Lifetime  (10 rides · 2026-05-06 – 2026-06-01)
+  Total XP:         14,186   avg  1,419/ride  ·  1,308/hr avg
+  Total Drops:     379,027   avg 37,903/ride  ·  34,955/hr avg
+  Total time:   10h 50m
+
+Personal Bests
+  XP/hr           2,482  ("Zwift - Watopia" — 2026-06-01)
+  ...
+```
+
+`zwift-stats chart` generates a self-contained HTML file and opens it in your browser with four charts:
+
+- **Cumulative XP over time** — tracks your total XP milestone progress
+- **Cumulative Drops over time** — tracks your Drops wealth
+- **XP per ride** — bar chart of your most recent 50 rides
+- **XP/hr efficiency** — your intensity trend over time
 
 ## Personal bests
 
@@ -120,4 +161,7 @@ src/
   bests.ts        SQLite personal bests store
   format.ts       Builds the description block string
   daemon.ts       Installs/uninstalls the macOS LaunchAgent
+  backfill.ts     Scans all Zwift log files and processes historical rides
+  summary.ts      Terminal summary statistics
+  chart.ts        Generates browser-based XP/Drops charts
 ```

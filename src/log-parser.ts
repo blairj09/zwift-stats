@@ -48,12 +48,33 @@ export function parseLog(fitFileName: string, logPath?: string): RideStats | nul
   const block = [...blocks].reverse().find(b => b.xp > 0 || b.drops > 0);
   if (!block) return null;
 
-  return {
+  const stats: RideStats = {
     xp: block.xp,
     drops: block.drops,
     endingTotalXp: block.endingTotalXp,
     endingDrops: block.endingDrops,
   };
+
+  return isPlausible(stats) ? stats : null;
+}
+
+// Values at or above 2^31 indicate a Zwift integer overflow in the log.
+// Earned values must also not exceed their respective cumulative totals.
+const MAX_PLAUSIBLE = 2 ** 31;
+
+export function isPlausible(stats: RideStats): boolean {
+  return (
+    stats.xp >= 0 &&
+    stats.drops >= 0 &&
+    stats.endingTotalXp >= 0 &&
+    stats.endingDrops >= 0 &&
+    stats.xp < MAX_PLAUSIBLE &&
+    stats.drops < MAX_PLAUSIBLE &&
+    stats.endingTotalXp < MAX_PLAUSIBLE &&
+    stats.endingDrops < MAX_PLAUSIBLE &&
+    stats.endingTotalXp >= stats.xp &&
+    stats.endingDrops >= stats.drops
+  );
 }
 
 function findEarnedBlocks(lines: string[]): EarnedBlock[] {
