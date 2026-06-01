@@ -1,3 +1,11 @@
 #!/usr/bin/env bash
-DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# Resolve symlinks to find the actual project directory (works with npm link)
+SOURCE="$0"
+while [ -h "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+DIR="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+
 exec "$DIR/node_modules/.bin/tsx" "$DIR/src/index.ts" "$@"

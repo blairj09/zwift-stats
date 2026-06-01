@@ -1,5 +1,7 @@
 # zwift-stats
 
+> **macOS only.** This tool relies on the macOS LaunchAgent system for background execution and expects Zwift's default file paths on macOS (`~/Documents/Zwift/`). It will not work on Windows or Linux.
+
 Automatically appends Zwift XP and Drops stats to your Strava activity descriptions after every ride. Tracks personal bests and highlights them inline.
 
 ```
@@ -10,26 +12,29 @@ Drops: 🏆 52,385  (🏆 28,236/hr)
 
 ## How it works
 
-Zwift writes a plaintext summary to `~/Documents/Zwift/Logs/Log.txt` at the end of every activity, including XP earned and Drops earned. A local daemon watches your Zwift Activities folder for new `.fit` files (the ride-complete signal), reads the corresponding log entry, computes per-hour rates, checks personal bests, and updates the Strava activity description automatically — typically within 30–60 seconds of saving your ride.
+Zwift writes a plaintext summary to `~/Documents/Zwift/Logs/Log.txt` at the end of every activity, including XP earned and Drops earned. A local daemon watches your Zwift Activities folder for new `.fit` files (the ride-complete signal), reads the corresponding log entry, computes per-hour rates, checks personal bests, and updates the Strava activity description — typically within 30–60 seconds of saving your ride.
 
 > **Why not the FIT file?** Zwift doesn't embed XP or Drops in the FIT files it uploads to Strava. The log file is the only reliable local source for these values.
 
 ## Requirements
 
-- **macOS** (the daemon uses the macOS LaunchAgent system; Zwift paths are macOS defaults)
+- **macOS**
 - **Node.js 18+**
 - **Zwift** installed with activities syncing to Strava
 - **A Strava API application** (free, takes 2 minutes to create)
 
 ## Setup
 
-### 1. Clone and install dependencies
+### 1. Clone, install, and link
 
 ```bash
-git clone https://github.com/jamesblair/zwift-stats.git
+git clone https://github.com/blairj09/zwift-stats.git
 cd zwift-stats
 npm install
+npm link
 ```
+
+`npm link` registers `zwift-stats` as a global command so you can run it from anywhere without `npm run`.
 
 ### 2. Create a Strava API application
 
@@ -43,52 +48,35 @@ If you already have a Strava API app (e.g. for another integration), you can reu
 ### 3. Authenticate with Strava
 
 ```bash
-npm run auth
+zwift-stats auth
 ```
 
-This will prompt for your Client ID and Client Secret, open your browser to Strava's authorization page, and save tokens to `~/.config/zwift-stats/`. You only need to do this once.
+This prompts for your Client ID and Client Secret, opens your browser to Strava's authorization page, and saves tokens to `~/.config/zwift-stats/`. You only need to do this once.
 
 ### 4. Install the daemon
 
 ```bash
-npm run daemon:install
+zwift-stats daemon install
 ```
 
-This generates a correctly-pathed LaunchAgent plist for your machine, installs it to `~/Library/LaunchAgents/`, and starts it immediately. The daemon will auto-start on every login.
+This generates a correctly-pathed LaunchAgent plist for your machine, installs it to `~/Library/LaunchAgents/`, and starts it immediately. The daemon auto-starts on every login.
 
 That's it. The next time you finish a Zwift ride and hit **Save**, your Strava description will be updated automatically.
 
-## Usage
-
-### Automatic
-
-Once the daemon is installed, everything is hands-off. Finish a ride in Zwift → save → description appears on Strava within ~60 seconds.
-
-### Manual processing
-
-To process a specific ride (useful for backfilling past rides that are in your log):
+## CLI reference
 
 ```bash
-npm run process -- ~/Documents/Zwift/Activities/2026-06-01-09-41-22.fit
-```
-
-Preview without updating Strava:
-
-```bash
-npm run process -- ~/Documents/Zwift/Activities/2026-06-01-09-41-22.fit --dry-run
-```
-
-### Daemon management
-
-```bash
-npm run daemon:status     # Check if the daemon is running
-npm run daemon:install    # Install (or reinstall after moving the project)
-npm run daemon:uninstall  # Stop and remove the daemon
+zwift-stats auth                    # One-time Strava OAuth setup
+zwift-stats process <file>          # Manually process a specific .fit file
+zwift-stats process <file> --dry-run  # Preview without updating Strava
+zwift-stats daemon install          # Install and start the background daemon
+zwift-stats daemon uninstall        # Stop and remove the daemon
+zwift-stats daemon status           # Check whether the daemon is running
 ```
 
 ## Personal bests
 
-Personal bests are tracked globally across all rides and stored in a local SQLite database at `~/.local/share/zwift-stats/bests.db`. Four metrics are tracked:
+Personal bests are tracked globally across all rides in a local SQLite database at `~/.local/share/zwift-stats/bests.db`. Four metrics are tracked:
 
 | Metric | Description |
 |---|---|
@@ -114,9 +102,9 @@ If Strava has multiple Virtual Ride activities in the same time window (e.g. a d
 
 This tool is designed to be set-and-forget:
 
-- **Strava tokens** auto-refresh silently. If you ever revoke access in Strava settings, re-run `npm run auth`.
-- **Zwift updates** occasionally change log formatting. If descriptions stop appearing, run a `--dry-run` to diagnose. The relevant patterns are in `src/log-parser.ts`.
-- **After moving the project** to a different directory, re-run `npm run daemon:install` to regenerate the plist with updated paths.
+- **Strava tokens** auto-refresh silently. If you ever revoke access in Strava settings, re-run `zwift-stats auth`.
+- **Zwift updates** occasionally change log formatting. If descriptions stop updating, run `zwift-stats process <file> --dry-run` to diagnose. The relevant patterns are in `src/log-parser.ts`.
+- **After moving the project** to a different directory, re-run `zwift-stats daemon install` to regenerate the plist with updated paths.
 
 ## Project structure
 
