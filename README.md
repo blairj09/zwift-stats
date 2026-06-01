@@ -89,8 +89,8 @@ A 🏆 appears inline next to any value that sets a new personal best:
 
 ```
 XP: 🏆 2,482  (🏆 1,338/hr)   ← both total and rate are new records
-XP: 2,482  (🏆 1,338/hr)       ← rate PR only (short hard effort)
-XP: 🏆 2,482  (1,338/hr)       ← total PR only (longest ride)
+XP: 2,482  (🏆 1,338/hr)       ← rate PR only
+XP: 🏆 2,482  (1,338/hr)       ← total PR only
 XP: 2,482  (1,338/hr)          ← neither
 ```
 
