@@ -43,6 +43,13 @@ async function main() {
       break;
     }
 
+    case 'refresh': {
+      const { runRefresh } = await import('./refresh.js');
+      await runRefresh({ names: args.includes('--names') });
+      break;
+    }
+
+    case 'dashboard':
     case 'chart': {
       const { generateChart } = await import('./chart.js');
       const outputFlag = args.indexOf('--output');
@@ -86,7 +93,8 @@ Commands:
   process <file> [--dry-run]     Manually process a FIT file
   backfill [--dry-run]           Scan all Zwift logs and process historical rides
   stats                          Print lifetime XP/Drops summary statistics
-  chart [--output <file>]        Generate charts and open in browser
+  refresh [--names]              Fill distance/elevation from FIT files (and ride names from Strava), rebuild bests
+  dashboard [--output <file>]    Generate the XP/Drops dashboard and open in browser (alias: chart)
   daemon install                 Install and start the macOS LaunchAgent
   daemon uninstall               Stop and remove the macOS LaunchAgent
   daemon status                  Check whether the daemon is running

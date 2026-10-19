@@ -24,6 +24,7 @@ export async function processFitFile(fitPath: string, opts: PipelineOptions = {}
   const fit = await parseFit(fitPath);
   console.log(`  Start time: ${fit.startTime.toISOString()}`);
   console.log(`  Duration: ${Math.round(fit.durationSeconds / 60)} min`);
+  if (fit.distanceKm !== null) console.log(`  Distance: ${fit.distanceKm.toFixed(1)} km`);
 
   if (fit.durationSeconds < 60) {
     console.log('  Duration < 60s — skipping (likely a cancelled/test activity).');
@@ -41,13 +42,16 @@ export async function processFitFile(fitPath: string, opts: PipelineOptions = {}
   const xpPerHour = stats.xp / hours;
   const dropsPerHour = stats.drops / hours;
 
+  const distanceKm = fit.distanceKm ?? undefined;
+  const candidates = { xp: stats.xp, drops: stats.drops, xpPerHour, dropsPerHour, distanceKm };
+
   console.log(`  XP: ${stats.xp.toLocaleString('en-GB')} (${Math.round(xpPerHour).toLocaleString('en-GB')}/hr)`);
   console.log(`  Drops: ${stats.drops.toLocaleString('en-GB')} (${Math.round(dropsPerHour).toLocaleString('en-GB')}/hr)`);
 
   if (opts.dryRun) {
     console.log('\n  [DRY RUN] Checking personal bests without saving...');
-    const prs = previewBests(xpPerHour, dropsPerHour, stats.endingTotalXp, stats.endingDrops);
-    const block = buildBlock(stats.xp, stats.drops, fit.durationSeconds, prs);
+    const prs = previewBests(candidates);
+    const block = buildBlock(stats.xp, stats.drops, fit.durationSeconds, prs, distanceKm);
     console.log('\n  Description block that would be appended:\n');
     console.log(block.split('\n').map(l => `    ${l}`).join('\n'));
     return;
@@ -57,9 +61,15 @@ export async function processFitFile(fitPath: string, opts: PipelineOptions = {}
   saveRide({
     fitFile: fitFileName,
     processedAt: new Date().toISOString(),
+    startTime: fit.startTime.toISOString(),
     xp: stats.xp,
     drops: stats.drops,
     durationSeconds: fit.durationSeconds,
+    movingSeconds: fit.movingSeconds ?? undefined,
+    distanceKm,
+    elevationM: fit.elevationM ?? undefined,
+    avgPower: fit.avgPower ?? undefined,
+    avgHeartRate: fit.avgHeartRate ?? undefined,
     xpPerHour,
     dropsPerHour,
   });
@@ -80,13 +90,13 @@ export async function processFitFile(fitPath: string, opts: PipelineOptions = {}
 
   if (hasMarker(existing)) {
     console.log('  Description already has Zwift Stats block — skipping update.');
-    updateRideStravaId(fitFileName, activity.id);
+    updateRideStravaId(fitFileName, activity.id, activity.name);
     return;
   }
 
   // Check and update personal bests
   const prs = checkAndUpdateBests(
-    xpPerHour, dropsPerHour, stats.endingTotalXp, stats.endingDrops,
+    candidates,
     fit.startTime.toISOString(),
     activity.id,
     activity.name,
@@ -94,12 +104,14 @@ export async function processFitFile(fitPath: string, opts: PipelineOptions = {}
 
   if (prs.newXpPerHour) console.log('  🏆 New best XP/hr!');
   if (prs.newDropsPerHour) console.log('  🏆 New best Drops/hr!');
+  if (prs.newXpPerKm) console.log('  🏆 New best XP/km!');
+  if (prs.newDropsPerKm) console.log('  🏆 New best Drops/km!');
 
-  const block = buildBlock(stats.xp, stats.drops, fit.durationSeconds, prs);
+  const block = buildBlock(stats.xp, stats.drops, fit.durationSeconds, prs, distanceKm);
   const newDescription = appendBlock(existing, block);
 
   await updateDescription(activity.id, newDescription);
-  updateRideStravaId(fitFileName, activity.id);
+  updateRideStravaId(fitFileName, activity.id, activity.name);
 
   console.log('  Strava description updated successfully.');
 }

@@ -15,20 +15,24 @@ export function buildBlock(
   drops: number,
   durationSeconds: number,
   prs: CheckedBests,
+  distanceKm?: number,
 ): string {
   const hours = durationSeconds / 3600;
   const xpPerHour = xp / hours;
   const dropsPerHour = drops / hours;
+  const trophy = (isNew: boolean) => (isNew ? '🏆 ' : '');
 
-  const xpTotalStr = `${prs.newTotalXp ? '🏆 ' : ''}${num(xp)}`;
-  const xpHrStr = `${prs.newXpPerHour ? '🏆 ' : ''}${num(xpPerHour)}/hr`;
-  const dropsTotalStr = `${prs.newTotalDrops ? '🏆 ' : ''}${num(drops)}`;
-  const dropsHrStr = `${prs.newDropsPerHour ? '🏆 ' : ''}${num(dropsPerHour)}/hr`;
+  const xpRates = [`${trophy(prs.newXpPerHour)}${num(xpPerHour)}/hr`];
+  const dropsRates = [`${trophy(prs.newDropsPerHour)}${num(dropsPerHour)}/hr`];
+  if (distanceKm && distanceKm > 0) {
+    xpRates.push(`${trophy(prs.newXpPerKm)}${num(xp / distanceKm)}/km`);
+    dropsRates.push(`${trophy(prs.newDropsPerKm)}${num(drops / distanceKm)}/km`);
+  }
 
   const lines = [
     MARKER,
-    `XP: ${xpTotalStr}  (${xpHrStr})`,
-    `Drops: ${dropsTotalStr}  (${dropsHrStr})`,
+    `XP: ${trophy(prs.newTotalXp)}${num(xp)}  (${xpRates.join(' · ')})`,
+    `Drops: ${trophy(prs.newTotalDrops)}${num(drops)}  (${dropsRates.join(' · ')})`,
   ];
 
   return lines.join('\n');
