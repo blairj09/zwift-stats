@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Zwift Stats</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --surface-0: #f4f3f0;
+      --surface-1: #fcfcfb;
+      --text-primary: #0b0b0b;
+      --text-secondary: #52514e;
+      --text-muted: #898781;
+      --grid: #e1e0d9;
+      --border: rgba(11, 11, 11, 0.10);
+      --accent-bg: rgba(42, 120, 214, 0.10);
+      --xp: #2a78d6;
+      --drops: #eb6834;
+      --distance: #1baf7a;
+      --time: #6250d6;
+          }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        color-scheme: dark;
+        --surface-0: #111110;
+        --surface-1: #1a1a19;
+        --text-primary: #f0efec;
+        --text-secondary: #c3c2b7;
+        --text-muted: #898781;
+        --grid: #2c2c2a;
+        --border: rgba(255, 255, 255, 0.10);
+        --accent-bg: rgba(57, 135, 229, 0.18);
+        --xp: #3987e5;
+        --drops: #d95926;
+        --distance: #199e70;
+        --time: #9085e9;
+              }
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --surface-0: #111110;
+      --surface-1: #1a1a19;
+      --text-primary: #f0efec;
+      --text-secondary: #c3c2b7;
+      --text-muted: #898781;
+      --grid: #2c2c2a;
+      --border: rgba(255, 255, 255, 0.10);
+      --accent-bg: rgba(57, 135, 229, 0.18);
+      --xp: #3987e5;
+      --drops: #d95926;
+      --distance: #199e70;
+      --time: #9085e9;
+          }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--surface-0);
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 14px;
+      line-height: 1.4;
+      padding: 24px 16px 48px;
+    }
+    main { max-width: 1200px; margin: 0 auto; display: grid; gap: 20px; }
+    header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
+    h1 { font-size: 1.4rem; font-weight: 650; }
+    .muted { color: var(--text-muted); }
+    .secondary { color: var(--text-secondary); }
+
+    .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+    .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface-1); }
+    .seg button {
+      border: 0; background: transparent; color: var(--text-secondary);
+      padding: 6px 12px; font: inherit; cursor: pointer;
+    }
+    .seg button + button { border-left: 1px solid var(--border); }
+    .seg button[aria-pressed="true"] { background: var(--accent-bg); color: var(--text-primary); font-weight: 600; }
+    input[type="search"], select {
+      font: inherit; color: var(--text-primary); background: var(--surface-1);
+      border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px;
+    }
+    input[type="search"] { min-width: 220px; flex: 1 1 220px; max-width: 360px; }
+
+    .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    @media (max-width: 800px) { .tiles { grid-template-columns: repeat(2, 1fr); } }
+    .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+    .tile .label { font-size: 0.78rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.06em; display: flex; align-items: center; gap: 6px; }
+    .tile .value { font-size: 1.5rem; font-weight: 650; margin-top: 4px; font-variant-numeric: tabular-nums; }
+    .tile .sub { font-size: 0.8rem; color: var(--text-muted); margin-top: 2px; font-variant-numeric: tabular-nums; }
+        .swatch { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 800px) { .grid2 { grid-template-columns: 1fr; } }
+    .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 16px; min-width: 0; }
+    .card-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 12px; }
+    .card h2 { font-size: 0.95rem; font-weight: 600; }
+    .card p.note { font-size: 0.8rem; color: var(--text-muted); margin-top: 8px; }
+    .chart-wrap { position: relative; height: 280px; }
+    .chart-wrap.short { height: 220px; }
+
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+    th, td { padding: 7px 10px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--grid); }
+    th:first-child, td:first-child, th.left, td.left { text-align: left; }
+    td.name { white-space: normal; min-width: 180px; }
+    th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); cursor: pointer; user-select: none; position: sticky; top: 0; background: var(--surface-1); }
+    th[aria-sort="ascending"]::after { content: " ▲"; }
+    th[aria-sort="descending"]::after { content: " ▼"; }
+    tbody tr:hover { background: var(--accent-bg); }
+    a { color: var(--xp); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    button.more {
+      margin-top: 12px; font: inherit; color: var(--text-primary); background: transparent;
+      border: 1px solid var(--border); border-radius: 8px; padding: 6px 14px; cursor: pointer;
+    }
+    .empty { padding: 40px; text-align: center; color: var(--text-muted); }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Zwift Stats</h1>
+    <span class="muted" id="generated"></span>
+  </header>
+
+  <div class="controls">
+    <div class="seg" id="range" role="group" aria-label="Date range">
+      <button data-range="28">4 wk</button>
+      <button data-range="84">12 wk</button>
+      <button data-range="182">6 mo</button>
+      <button data-range="365">1 yr</button>
+      <button data-range="all">All</button>
+    </div>
+    <input type="search" id="search" placeholder="Filter by ride or route name" aria-label="Filter by ride or route name">
+  </div>
+
+  <section class="tiles" id="tiles" aria-label="Totals for the selected range"></section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2 id="weeklyTitle">Per week</h2>
+      <select id="weeklyMetric" aria-label="Weekly metric"></select>
+    </div>
+    <div class="chart-wrap"><canvas id="weeklyChart" role="img" aria-label="Weekly chart"></canvas></div>
+    <p class="note">Weeks start Monday. Rates are week totals divided by week time or distance, so long rides count for more than short ones.</p>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2 id="trendTitle">Per ride</h2>
+      <select id="trendMetric" aria-label="Per-ride metric"></select>
+    </div>
+    <div class="chart-wrap"><canvas id="trendChart" role="img" aria-label="Per-ride chart"></canvas></div>
+  </section>
+
+  <div class="grid2">
+    <section class="card">
+      <div class="card-head"><h2>XP earned, cumulative</h2></div>
+      <div class="chart-wrap short"><canvas id="cumXp" role="img" aria-label="Cumulative XP"></canvas></div>
+    </section>
+    <section class="card">
+      <div class="card-head"><h2>Drops earned, cumulative</h2></div>
+      <div class="chart-wrap short"><canvas id="cumDrops" role="img" aria-label="Cumulative drops"></canvas></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>By ride name</h2>
+      <span class="muted">Which rides pay best. Names come from Strava.</span>
+    </div>
+    <div class="table-wrap"><table id="routeTable"></table></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h2>Rides</h2><span class="muted" id="rideCount"></span></div>
+    <div class="table-wrap"><table id="rideTable"></table></div>
+    <button id="moreRides" class="more" hidden></button>
+  </section>
+</main>
+
+<script>
+const DATA = /*__DATA__*/null;
+
+// ---------- formatting ----------
+const nf0 = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 0 });
+const nf1 = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 1, minimumFractionDigits: 1 });
+const fmt0 = v => (v === null || v === undefined || !isFinite(v) ? '–' : nf0.format(v));
+const fmt1 = v => (v === null || v === undefined || !isFinite(v) ? '–' : nf1.format(v));
+const fmtHours = s => {
+  if (!s) return '–';
+  const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+  return h ? h + 'h ' + String(m).padStart(2, '0') + 'm' : m + 'm';
+};
+const dayFmt = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+const shortDay = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short' });
+const displayName = r => (r.name ? r.name.replace(/^Zwift\s*-\s*/i, '') : 'Unnamed ride');
+
+// ---------- data prep ----------
+const rides = (DATA ? DATA.rides : []).map(r => ({ ...r, t: new Date(r.date) })).sort((a, b) => a.t - b.t);
+rides.forEach(r => {
+  r.hrs = r.durS / 3600;
+  r.xpHr = r.hrs > 0 ? r.xp / r.hrs : null;
+  r.dropsHr = r.hrs > 0 ? r.drops / r.hrs : null;
+  r.xpKm = r.km > 0 ? r.xp / r.km : null;
+  r.dropsKm = r.km > 0 ? r.drops / r.km : null;
+});
+
+function weekStart(d) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
+  return x;
+}
+
+/** Totals and rates over a set of rides. Per-km rates only use rides with a distance. */
+function aggregate(list) {
+  const sum = (f, l = list) => l.reduce((s, r) => s + (f(r) || 0), 0);
+  const withKm = list.filter(r => r.km > 0);
+  const km = sum(r => r.km, withKm);
+  const hrs = sum(r => r.hrs);
+  const xp = sum(r => r.xp), drops = sum(r => r.drops);
+  return {
+    rides: list.length, xp, drops, km: withKm.length ? km : null, durS: sum(r => r.durS),
+    elevM: sum(r => r.elevM),
+    xpHr: hrs > 0 ? xp / hrs : null,
+    dropsHr: hrs > 0 ? drops / hrs : null,
+    xpKm: km > 0 ? sum(r => r.xp, withKm) / km : null,
+    dropsKm: km > 0 ? sum(r => r.drops, withKm) / km : null,
+  };
+}
+
+// ---------- state ----------
+const store = {
+  get(k, d) { try { return localStorage.getItem('zs.' + k) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('zs.' + k, v); } catch {} },
+};
+const RANGES = ['28', '84', '182', '365', 'all'];
+const state = {
+  range: RANGES.includes(store.get('range', 'all')) ? store.get('range', 'all') : 'all',
+  search: '',
+  weeklyMetric: store.get('weeklyMetric', 'xp'),
+  trendMetric: store.get('trendMetric', 'xpHr'),
+  routeSort: { key: 'dropsHr', dir: -1 },
+  rideSort: { key: 't', dir: -1 },
+  showAllRides: false,
+};
+const RIDE_LIMIT = 25;
+
+const METRICS = {
+  xp:      { label: 'XP',         color: '--xp',       fmt: fmt0 },
+  drops:   { label: 'Drops',      color: '--drops',    fmt: fmt0 },
+  km:      { label: 'Distance (km)', color: '--distance', fmt: fmt1 },
+  hrs:     { label: 'Time (hours)',  color: '--time',     fmt: fmt1 },
+  xpHr:    { label: 'XP per hour',    color: '--xp',    fmt: fmt0 },
+  xpKm:    { label: 'XP per km',      color: '--xp',    fmt: fmt1 },
+  dropsHr: { label: 'Drops per hour', color: '--drops', fmt: fmt0 },
+  dropsKm: { label: 'Drops per km',   color: '--drops', fmt: fmt0 },
+};
+const WEEKLY_METRICS = ['xp', 'drops', 'km', 'hrs', 'xpHr', 'xpKm', 'dropsHr', 'dropsKm'];
+const TREND_METRICS = ['xpHr', 'xpKm', 'dropsHr', 'dropsKm', 'xp', 'drops', 'km'];
+
+function filtered() {
+  let list = rides;
+  if (state.range !== 'all') {
+    const cutoff = new Date();
+    cutoff.setHours(0, 0, 0, 0);
+    cutoff.setDate(cutoff.getDate() - Number(state.range));
+    list = list.filter(r => r.t >= cutoff);
+  }
+  const q = state.search.trim().toLowerCase();
+  if (q) list = list.filter(r => (r.name || '').toLowerCase().includes(q));
+  return list;
+}
+
+// ---------- theme-aware chart setup ----------
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+function withAlpha(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+}
+const charts = {};
+function draw(id, config) {
+  if (charts[id]) charts[id].destroy();
+  charts[id] = new Chart(document.getElementById(id), config);
+}
+function baseOptions(yFmt, extra = {}) {
+  Chart.defaults.color = css('--text-muted');
+  Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    interaction: { mode: 'index', intersect: false },
+    scales: {
+      x: { grid: { display: false }, border: { color: css('--grid') }, ticks: { maxRotation: 0, autoSkipPadding: 16 } },
+      y: { beginAtZero: true, grid: { color: css('--grid') }, border: { display: false }, ticks: { callback: v => yFmt(v), maxTicksLimit: 6 } },
+    },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: css('--surface-1'), titleColor: css('--text-primary'), bodyColor: css('--text-secondary'),
+        borderColor: css('--border'), borderWidth: 1, padding: 10, boxPadding: 4,
+      },
+    },
+    ...extra,
+  };
+}
+
+// ---------- sections ----------
+function renderTiles(list) {
+  const a = aggregate(list);
+  const thisWeek = weekStart(new Date());
+  const lastWeek = new Date(thisWeek); lastWeek.setDate(lastWeek.getDate() - 7);
+  const tw = aggregate(list.filter(r => r.t >= thisWeek));
+  const lw = aggregate(list.filter(r => r.t >= lastWeek && r.t < thisWeek));
+
+  // A week in progress is not compared as a percentage; that would read as a drop every Monday
+  function delta(key, f) {
+    return `This week ${f(tw.rides ? tw[key] : null)} · last ${f(lw.rides ? lw[key] : null)}`;
+  }
+  const tiles = [
+    ['XP', fmt0(a.xp), delta('xp', fmt0), '--xp'],
+    ['Drops', fmt0(a.drops), delta('drops', fmt0), '--drops'],
+    ['XP / hour', fmt0(a.xpHr), delta('xpHr', fmt0), '--xp'],
+    ['XP / km', fmt1(a.xpKm), delta('xpKm', fmt1), '--xp'],
+    ['Drops / hour', fmt0(a.dropsHr), delta('dropsHr', fmt0), '--drops'],
+    ['Drops / km', fmt0(a.dropsKm), delta('dropsKm', fmt0), '--drops'],
+    ['Distance', a.km === null ? '–' : fmt0(a.km) + ' km', delta('km', fmt0), '--distance'],
+    ['Time', fmtHours(a.durS), `${a.rides} ride${a.rides === 1 ? '' : 's'} · ${tw.rides} this week`, '--time'],
+  ];
+  document.getElementById('tiles').innerHTML = tiles.map(([label, value, sub, color]) => `
+    <div class="tile">
+      <div class="label"><span class="swatch" style="background:var(${color})"></span>${label}</div>
+      <div class="value">${value}</div>
+      <div class="sub">${sub}</div>
+    </div>`).join('');
+}
+
+function renderWeekly(list) {
+  const m = METRICS[state.weeklyMetric];
+  document.getElementById('weeklyTitle').textContent = m.label + ' per week';
+  const groups = new Map();
+  if (list.length) {
+    // Include empty weeks so gaps in riding show as gaps
+    for (let w = weekStart(list[0].t); w <= list[list.length - 1].t; w.setDate(w.getDate() + 7)) {
+      groups.set(w.getTime(), []);
+    }
+  }
+  list.forEach(r => groups.get(weekStart(r.t).getTime()).push(r));
+  const weeks = [...groups.entries()];
+  const values = weeks.map(([, l]) => {
+    if (!l.length) return state.weeklyMetric.endsWith('Hr') || state.weeklyMetric.endsWith('Km') ? null : 0;
+    const a = aggregate(l);
+    return state.weeklyMetric === 'hrs' ? a.durS / 3600 : a[state.weeklyMetric];
+  });
+  const color = css(m.color);
+  draw('weeklyChart', {
+    type: 'bar',
+    data: {
+      labels: weeks.map(([t]) => shortDay.format(new Date(t))),
+      datasets: [{
+        label: m.label, data: values, backgroundColor: color, borderRadius: 4, borderSkipped: 'start',
+        maxBarThickness: 36, categoryPercentage: 0.9, barPercentage: 0.9,
+      }],
+    },
+    options: baseOptions(m.fmt, {
+      plugins: {
+        ...baseOptions(m.fmt).plugins,
+        tooltip: {
+          ...baseOptions(m.fmt).plugins.tooltip,
+          callbacks: {
+            title: items => 'Week of ' + dayFmt.format(new Date(weeks[items[0].dataIndex][0])),
+            label: item => {
+              const l = weeks[item.dataIndex][1];
+              return ` ${m.label}: ${m.fmt(item.raw)}  (${l.length} ride${l.length === 1 ? '' : 's'})`;
+            },
+          },
+        },
+      },
+    }),
+  });
+}
+
+function renderTrend(list) {
+  const key = state.trendMetric, m = METRICS[key];
+  document.getElementById('trendTitle').textContent = m.label + ' per ride';
+  const pts = list.filter(r => r[key] !== null && r[key] !== undefined);
+  const window = 5;
+  const avg = pts.map((_, i) => {
+    const s = pts.slice(Math.max(0, i - window + 1), i + 1);
+    return s.reduce((acc, r) => acc + r[key], 0) / s.length;
+  });
+  const color = css(m.color);
+  const surface = css('--surface-1');
+  draw('trendChart', {
+    type: 'line',
+    data: {
+      labels: pts.map(r => shortDay.format(r.t)),
+      datasets: [
+        { label: 'Each ride', data: pts.map(r => r[key]), showLine: false, pointRadius: 4, pointHoverRadius: 6,
+          pointBackgroundColor: withAlpha(color, 0.45), pointBorderColor: surface, pointBorderWidth: 2 },
+        { label: '5-ride average', data: avg, borderColor: color, borderWidth: 2, pointRadius: 0, tension: 0.3 },
+      ],
+    },
+    options: baseOptions(m.fmt, {
+      plugins: {
+        ...baseOptions(m.fmt).plugins,
+        legend: { display: true, position: 'top', align: 'end', labels: { usePointStyle: true, boxWidth: 8, boxHeight: 8, color: css('--text-secondary') } },
+        tooltip: {
+          ...baseOptions(m.fmt).plugins.tooltip,
+          callbacks: {
+            title: items => displayName(pts[items[0].dataIndex]) + ' · ' + dayFmt.format(pts[items[0].dataIndex].t),
+            label: item => ` ${item.dataset.label}: ${m.fmt(item.raw)}`,
+          },
+        },
+      },
+    }),
+  });
+  if (!pts.length && key.endsWith('Km')) {
+    document.getElementById('trendTitle').textContent += ' (no distances yet; run zwift-stats refresh)';
+  }
+}
+
+function renderCumulative(list) {
+  for (const [id, key, colorVar] of [['cumXp', 'xp', '--xp'], ['cumDrops', 'drops', '--drops']]) {
+    let run = 0;
+    const values = list.map(r => (run += r[key]));
+    const color = css(colorVar);
+    draw(id, {
+      type: 'line',
+      data: {
+        labels: list.map(r => shortDay.format(r.t)),
+        datasets: [{ data: values, borderColor: color, backgroundColor: withAlpha(color, 0.12), fill: true, borderWidth: 2, pointRadius: 0, tension: 0.2 }],
+      },
+      options: baseOptions(fmt0, {
+        plugins: {
+          ...baseOptions(fmt0).plugins,
+          tooltip: {
+            ...baseOptions(fmt0).plugins.tooltip,
+            callbacks: {
+              title: items => dayFmt.format(list[items[0].dataIndex].t),
+              label: item => ` ${fmt0(item.raw)} total (+${fmt0(list[item.dataIndex][key])})`,
+            },
+          },
+        },
+      }),
+    });
+  }
+}
+
+function sortableTable(el, columns, rows, sort, onSort, limit = Infinity) {
+  const sorted = [...rows].sort((a, b) => {
+    const x = a[sort.key], y = b[sort.key];
+    if (x === null || x === undefined) return 1;
+    if (y === null || y === undefined) return -1;
+    return (x < y ? -1 : x > y ? 1 : 0) * sort.dir;
+  }).slice(0, limit);
+  el.innerHTML = '<thead><tr>' + columns.map(c =>
+    `<th data-key="${c.key}" class="${c.left ? 'left' : ''}" ${c.key === sort.key ? `aria-sort="${sort.dir > 0 ? 'ascending' : 'descending'}"` : ''}>${c.label}</th>`
+  ).join('') + '</tr></thead><tbody>' + (sorted.length ? sorted.map(r => '<tr>' + columns.map(c =>
+    `<td class="${c.cls || ''}">${c.render ? c.render(r) : c.fmt(r[c.key])}</td>`
+  ).join('') + '</tr>').join('') : `<tr><td colspan="${columns.length}" class="empty">No rides match.</td></tr>`) + '</tbody>';
+  el.querySelectorAll('th').forEach(th => th.addEventListener('click', () => {
+    const key = th.dataset.key;
+    onSort(sort.key === key ? { key, dir: -sort.dir } : { key, dir: columns.find(c => c.key === key).left ? 1 : -1 });
+  }));
+}
+
+const escapeHtml = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function renderRoutes(list) {
+  const groups = new Map();
+  list.filter(r => r.name).forEach(r => {
+    const k = displayName(r);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(r);
+  });
+  const rows = [...groups.entries()].map(([name, l]) => {
+    const a = aggregate(l);
+    return { name, ...a, avgKm: a.km !== null ? a.km / l.filter(r => r.km > 0).length : null, last: Math.max(...l.map(r => r.t)) };
+  });
+  const cols = [
+    { key: 'name', label: 'Ride', left: true, cls: 'name left', render: r => escapeHtml(r.name) },
+    { key: 'rides', label: 'Rides', fmt: fmt0 },
+    { key: 'avgKm', label: 'Avg km', fmt: fmt1 },
+    { key: 'xpHr', label: 'XP/hr', fmt: fmt0 },
+    { key: 'xpKm', label: 'XP/km', fmt: fmt1 },
+    { key: 'dropsHr', label: 'Drops/hr', fmt: fmt0 },
+    { key: 'dropsKm', label: 'Drops/km', fmt: fmt0 },
+    { key: 'last', label: 'Last ridden', render: r => shortDay.format(new Date(r.last)) },
+  ];
+  const el = document.getElementById('routeTable');
+  if (!rows.length) {
+    el.innerHTML = '<tbody><tr><td class="empty">No ride names yet. Run <code>zwift-stats refresh --names</code> to pull them from Strava.</td></tr></tbody>';
+    return;
+  }
+  sortableTable(el, cols, rows, state.routeSort, s => { state.routeSort = s; renderRoutes(filtered()); });
+}
+
+function renderRides(list) {
+  document.getElementById('rideCount').textContent = `${list.length} ride${list.length === 1 ? '' : 's'}`;
+  const cols = [
+    { key: 't', label: 'Date', render: r => dayFmt.format(r.t) },
+    { key: 'name', label: 'Ride', left: true, cls: 'name left', render: r => {
+      const n = escapeHtml(displayName(r));
+      return r.stravaId ? `<a href="https://www.strava.com/activities/${r.stravaId}" target="_blank" rel="noopener">${n}</a>` : n;
+    } },
+    { key: 'km', label: 'km', fmt: fmt1 },
+    { key: 'durS', label: 'Time', render: r => fmtHours(r.durS) },
+    { key: 'elevM', label: 'Climb m', fmt: fmt0 },
+    { key: 'power', label: 'Avg W', fmt: fmt0 },
+    { key: 'xp', label: 'XP', fmt: fmt0 },
+    { key: 'xpHr', label: 'XP/hr', fmt: fmt0 },
+    { key: 'xpKm', label: 'XP/km', fmt: fmt1 },
+    { key: 'drops', label: 'Drops', fmt: fmt0 },
+    { key: 'dropsHr', label: 'Drops/hr', fmt: fmt0 },
+    { key: 'dropsKm', label: 'Drops/km', fmt: fmt0 },
+  ];
+  sortableTable(document.getElementById('rideTable'), cols, list, state.rideSort, s => { state.rideSort = s; renderRides(filtered()); },
+    state.showAllRides ? Infinity : RIDE_LIMIT);
+  const more = document.getElementById('moreRides');
+  more.hidden = list.length <= RIDE_LIMIT;
+  more.textContent = state.showAllRides ? 'Show fewer' : `Show all ${list.length} rides`;
+}
+
+function render() {
+  const list = filtered();
+  document.querySelectorAll('#range button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.range === state.range)));
+  renderTiles(list);
+  renderWeekly(list);
+  renderTrend(list);
+  renderCumulative(list);
+  renderRoutes(list);
+  renderRides(list);
+}
+
+// ---------- wiring ----------
+function fillSelect(id, keys, value, onChange) {
+  const el = document.getElementById(id);
+  el.innerHTML = keys.map(k => `<option value="${k}">${METRICS[k].label}</option>`).join('');
+  el.value = keys.includes(value) ? value : keys[0];
+  el.addEventListener('change', () => onChange(el.value));
+  return el.value;
+}
+
+if (!rides.length) {
+  document.querySelector('main').innerHTML = '<div class="card empty">No rides recorded yet.</div>';
+} else {
+  document.getElementById('generated').textContent = 'Updated ' + dayFmt.format(new Date(DATA.generatedAt));
+  state.weeklyMetric = fillSelect('weeklyMetric', WEEKLY_METRICS, state.weeklyMetric, v => { state.weeklyMetric = v; store.set('weeklyMetric', v); renderWeekly(filtered()); });
+  state.trendMetric = fillSelect('trendMetric', TREND_METRICS, state.trendMetric, v => { state.trendMetric = v; store.set('trendMetric', v); renderTrend(filtered()); });
+  document.querySelectorAll('#range button').forEach(b => b.addEventListener('click', () => {
+    state.range = b.dataset.range; store.set('range', state.range); render();
+  }));
+  document.getElementById('moreRides').addEventListener('click', () => { state.showAllRides = !state.showAllRides; renderRides(filtered()); });
+  document.getElementById('search').addEventListener('input', e => { state.search = e.target.value; render(); });
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', render);
+  render();
+}
+</script>
+</body>
+</html>

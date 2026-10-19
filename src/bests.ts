@@ -33,10 +33,40 @@ function db(): Database.Database {
       drops_per_hour     REAL
     );
   `);
+  migrateRides(_db);
   return _db;
 }
 
-export type Metric = 'xp_per_hour' | 'drops_per_hour' | 'total_xp' | 'total_drops';
+// Columns added after the first release; ALTERed in on open so existing databases keep their rides
+const RIDE_COLUMNS: Record<string, string> = {
+  start_time: 'TEXT',
+  ride_name: 'TEXT',
+  moving_seconds: 'INTEGER',
+  distance_km: 'REAL',
+  elevation_m: 'REAL',
+  avg_power: 'REAL',
+  avg_hr: 'REAL',
+};
+
+function migrateRides(database: Database.Database): void {
+  const existing = new Set(
+    (database.prepare('PRAGMA table_info(rides)').all() as any[]).map(c => c.name),
+  );
+  for (const [name, type] of Object.entries(RIDE_COLUMNS)) {
+    if (!existing.has(name)) database.exec(`ALTER TABLE rides ADD COLUMN ${name} ${type}`);
+  }
+}
+
+export type Metric =
+  | 'xp_per_hour'
+  | 'drops_per_hour'
+  | 'xp_per_km'
+  | 'drops_per_km'
+  | 'total_xp'
+  | 'total_drops';
+
+// Per-km bests ignore very short rides, where a single segment or badge skews the rate
+export const MIN_KM_FOR_RATE_BEST = 5;
 
 export interface PersonalBest {
   metric: Metric;
@@ -84,12 +114,24 @@ export interface RideRecord {
   fitFile: string;
   stravaActivityId?: number;
   processedAt: string;
+  startTime?: string;
+  rideName?: string;
   xp: number;
   drops: number;
   durationSeconds: number;
+  movingSeconds?: number;
+  distanceKm?: number;
+  elevationM?: number;
+  avgPower?: number;
+  avgHeartRate?: number;
   xpPerHour: number;
   dropsPerHour: number;
 }
+
+export type RideDetails = Pick<
+  RideRecord,
+  'startTime' | 'movingSeconds' | 'distanceKm' | 'elevationM' | 'avgPower' | 'avgHeartRate'
+>;
 
 export function isAlreadyProcessed(fitFile: string): boolean {
   const row = db().prepare('SELECT id FROM rides WHERE fit_file = ?').get(fitFile);
@@ -100,66 +142,134 @@ export function saveRide(ride: RideRecord): void {
   db()
     .prepare(`
       INSERT OR IGNORE INTO rides
-        (fit_file, strava_activity_id, processed_at, xp, drops, duration_seconds, xp_per_hour, drops_per_hour)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (fit_file, strava_activity_id, processed_at, start_time, ride_name, xp, drops,
+         duration_seconds, moving_seconds, distance_km, elevation_m, avg_power, avg_hr,
+         xp_per_hour, drops_per_hour)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     .run(
       ride.fitFile,
       ride.stravaActivityId ?? null,
       ride.processedAt,
+      ride.startTime ?? null,
+      ride.rideName ?? null,
       ride.xp,
       ride.drops,
       ride.durationSeconds,
+      ride.movingSeconds ?? null,
+      ride.distanceKm ?? null,
+      ride.elevationM ?? null,
+      ride.avgPower ?? null,
+      ride.avgHeartRate ?? null,
       ride.xpPerHour,
       ride.dropsPerHour,
     );
 }
 
-export function updateRideStravaId(fitFile: string, stravaActivityId: number): void {
+export function updateRideDetails(fitFile: string, details: RideDetails): void {
   db()
-    .prepare('UPDATE rides SET strava_activity_id = ? WHERE fit_file = ?')
-    .run(stravaActivityId, fitFile);
+    .prepare(`
+      UPDATE rides SET
+        start_time = ?, moving_seconds = ?, distance_km = ?, elevation_m = ?, avg_power = ?, avg_hr = ?
+      WHERE fit_file = ?
+    `)
+    .run(
+      details.startTime ?? null,
+      details.movingSeconds ?? null,
+      details.distanceKm ?? null,
+      details.elevationM ?? null,
+      details.avgPower ?? null,
+      details.avgHeartRate ?? null,
+      fitFile,
+    );
+}
+
+export function updateRideStravaId(fitFile: string, stravaActivityId: number, rideName?: string): void {
+  db()
+    .prepare('UPDATE rides SET strava_activity_id = ?, ride_name = COALESCE(?, ride_name) WHERE fit_file = ?')
+    .run(stravaActivityId, rideName ?? null, fitFile);
+}
+
+export function updateRideName(fitFile: string, rideName: string): void {
+  db().prepare('UPDATE rides SET ride_name = ? WHERE fit_file = ?').run(rideName, fitFile);
 }
 
 export interface CheckedBests {
   newXpPerHour: boolean;
   newDropsPerHour: boolean;
+  newXpPerKm: boolean;
+  newDropsPerKm: boolean;
   newTotalXp: boolean;
   newTotalDrops: boolean;
 }
 
-export function previewBests(
-  xpPerHour: number,
-  dropsPerHour: number,
-  endingTotalXp: number,
-  endingDrops: number,
-): CheckedBests {
-  const isNew = (metric: Metric, value: number) => {
-    const existing = getBest(metric);
-    return !existing || value > existing.value;
-  };
+export interface BestCandidates {
+  xp: number;
+  drops: number;
+  xpPerHour: number;
+  dropsPerHour: number;
+  distanceKm?: number;
+}
+
+function candidateValues(c: BestCandidates): [Metric, number | null, keyof CheckedBests][] {
+  const perKm = c.distanceKm && c.distanceKm >= MIN_KM_FOR_RATE_BEST;
+  return [
+    ['xp_per_hour', c.xpPerHour, 'newXpPerHour'],
+    ['drops_per_hour', c.dropsPerHour, 'newDropsPerHour'],
+    ['xp_per_km', perKm ? c.xp / c.distanceKm! : null, 'newXpPerKm'],
+    ['drops_per_km', perKm ? c.drops / c.distanceKm! : null, 'newDropsPerKm'],
+    ['total_xp', c.xp, 'newTotalXp'],
+    ['total_drops', c.drops, 'newTotalDrops'],
+  ];
+}
+
+function noBests(): CheckedBests {
   return {
-    newXpPerHour: isNew('xp_per_hour', xpPerHour),
-    newDropsPerHour: isNew('drops_per_hour', dropsPerHour),
-    newTotalXp: isNew('total_xp', endingTotalXp),
-    newTotalDrops: isNew('total_drops', endingDrops),
+    newXpPerHour: false,
+    newDropsPerHour: false,
+    newXpPerKm: false,
+    newDropsPerKm: false,
+    newTotalXp: false,
+    newTotalDrops: false,
   };
+}
+
+export function previewBests(c: BestCandidates): CheckedBests {
+  const result = noBests();
+  for (const [metric, value, key] of candidateValues(c)) {
+    if (value === null) continue;
+    const existing = getBest(metric);
+    result[key] = !existing || value > existing.value;
+  }
+  return result;
 }
 
 export function getRides(): RideRecord[] {
   const rows = db()
-    .prepare('SELECT * FROM rides ORDER BY processed_at ASC')
+    .prepare('SELECT * FROM rides ORDER BY COALESCE(start_time, processed_at) ASC')
     .all() as any[];
   return rows.map(r => ({
     fitFile: r.fit_file,
     stravaActivityId: r.strava_activity_id ?? undefined,
     processedAt: r.processed_at,
+    startTime: r.start_time ?? undefined,
+    rideName: r.ride_name ?? undefined,
     xp: r.xp,
     drops: r.drops,
     durationSeconds: r.duration_seconds,
+    movingSeconds: r.moving_seconds ?? undefined,
+    distanceKm: r.distance_km ?? undefined,
+    elevationM: r.elevation_m ?? undefined,
+    avgPower: r.avg_power ?? undefined,
+    avgHeartRate: r.avg_hr ?? undefined,
     xpPerHour: r.xp_per_hour,
     dropsPerHour: r.drops_per_hour,
   }));
+}
+
+/** When the ride happened: the FIT start time, falling back to when it was processed. */
+export function rideDate(ride: RideRecord): string {
+  return ride.startTime ?? ride.processedAt;
 }
 
 export function getAllBests(): PersonalBest[] {
@@ -174,33 +284,35 @@ export function getAllBests(): PersonalBest[] {
 }
 
 export function checkAndUpdateBests(
-  xpPerHour: number,
-  dropsPerHour: number,
-  endingTotalXp: number,
-  endingDrops: number,
+  c: BestCandidates,
   achievedAt: string,
   stravaActivityId?: number,
   rideName?: string,
 ): CheckedBests {
-  const result: CheckedBests = {
-    newXpPerHour: false,
-    newDropsPerHour: false,
-    newTotalXp: false,
-    newTotalDrops: false,
-  };
-
-  const check = (metric: Metric, value: number, key: keyof CheckedBests) => {
+  const result = noBests();
+  for (const [metric, value, key] of candidateValues(c)) {
+    if (value === null) continue;
     const existing = getBest(metric);
     if (!existing || value > existing.value) {
       upsertBest({ metric, value, achievedAt, stravaActivityId, rideName });
       result[key] = true;
     }
-  };
-
-  check('xp_per_hour', xpPerHour, 'newXpPerHour');
-  check('drops_per_hour', dropsPerHour, 'newDropsPerHour');
-  check('total_xp', endingTotalXp, 'newTotalXp');
-  check('total_drops', endingDrops, 'newTotalDrops');
-
+  }
   return result;
+}
+
+/** Recompute every personal best from the rides table, replacing what is stored. */
+export function rebuildBests(): void {
+  const rides = getRides();
+  db().transaction(() => {
+    db().exec('DELETE FROM personal_bests');
+    for (const r of rides) {
+      checkAndUpdateBests(
+        { xp: r.xp, drops: r.drops, xpPerHour: r.xpPerHour, dropsPerHour: r.dropsPerHour, distanceKm: r.distanceKm },
+        rideDate(r),
+        r.stravaActivityId,
+        r.rideName,
+      );
+    }
+  })();
 }

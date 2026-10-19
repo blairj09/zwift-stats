@@ -2,12 +2,12 @@
 
 > **macOS only.** This tool relies on the macOS LaunchAgent system for background execution and expects Zwift's default file paths on macOS (`~/Documents/Zwift/`). It will not work on Windows or Linux.
 
-Automatically appends Zwift XP and Drops stats to your Strava activity descriptions after every ride. Tracks personal bests and highlights them inline.
+Automatically appends Zwift XP and Drops stats to your Strava activity descriptions after every ride, tracks personal bests, and builds a local dashboard of XP and Drops per ride, per week and per route, including XP/hour, XP/km, Drops/hour and Drops/km.
 
 ```
 --- Zwift Stats ---
-XP: 🏆 2,482  (🏆 1,338/hr)
-Drops: 🏆 52,385  (🏆 28,236/hr)
+XP: 🏆 2,482  (🏆 1,338/hr · 49/km)
+Drops: 🏆 52,385  (🏆 28,236/hr · 1,040/km)
 ```
 
 ## How it works
@@ -71,9 +71,11 @@ zwift-stats process <file>              # Manually process a specific .fit file
 zwift-stats process <file> --dry-run    # Preview without updating Strava
 zwift-stats backfill                    # Process all historical rides from Zwift logs
 zwift-stats backfill --dry-run          # Preview backfill without saving or updating Strava
-zwift-stats stats                       # Print lifetime XP/Drops summary statistics
-zwift-stats chart                       # Generate charts and open in browser
-zwift-stats chart --output <file>       # Write chart HTML to a specific path
+zwift-stats refresh                     # Fill distance/climbing/power for stored rides from FIT files, rebuild bests
+zwift-stats refresh --names             # Also fetch ride names from Strava (read-only)
+zwift-stats stats                       # Print lifetime, weekly and monthly XP/Drops summary
+zwift-stats dashboard                   # Generate the dashboard and open it in your browser
+zwift-stats dashboard --output <file>   # Write dashboard HTML to a specific path (alias: chart)
 zwift-stats daemon install              # Install and start the background daemon
 zwift-stats daemon uninstall            # Stop and remove the daemon
 zwift-stats daemon status               # Check whether the daemon is running
@@ -89,40 +91,42 @@ zwift-stats backfill
 
 This scans all log files in `~/Documents/Zwift/Logs/` (including rotated `Log (old N).txt` files), discovers every completed ride, and processes any not already in the local database. XP and Drops are read from the log file that recorded each session. Rides whose `.fit` files are no longer on disk are skipped gracefully.
 
-## Stats and charts
+## Upgrading from an earlier version
 
-Two commands let you explore your accumulated XP and Drops history.
+Earlier versions stored only XP, Drops and duration. After upgrading, run once:
 
-`zwift-stats stats` prints a terminal summary:
-
-```
-=== Zwift Stats Summary ===
-
-Lifetime  (10 rides · 2026-05-06 – 2026-06-01)
-  Total XP:         14,186   avg  1,419/ride  ·  1,308/hr avg
-  Total Drops:     379,027   avg 37,903/ride  ·  34,955/hr avg
-  Total time:   10h 50m
-
-Personal Bests
-  XP/hr           2,482  ("Zwift - Watopia" — 2026-06-01)
-  ...
+```bash
+zwift-stats refresh --names
 ```
 
-`zwift-stats chart` generates a self-contained HTML file and opens it in your browser with four charts:
+This re-reads each stored ride's `.fit` file to add its real start date, distance, climbing, average power and heart rate, fetches ride names from Strava for the dashboard's per-route table (read-only, at most 80 per run to stay inside Strava's rate limit; run it again later if it says so), and rebuilds personal bests from your ride history. It never edits Strava activities. New rides get all of this automatically.
 
-- **Cumulative XP over time** — tracks your total XP milestone progress
-- **Cumulative Drops over time** — tracks your Drops wealth
-- **XP per ride** — bar chart of your most recent 50 rides
-- **XP/hr efficiency** — your intensity trend over time
+## Stats and dashboard
+
+`zwift-stats stats` prints a terminal summary: lifetime totals with per-hour and per-km rates, personal bests, the last 30 days, the last 8 weeks (rides, km, XP, XP/hr, XP/km, Drops, Drops/hr, Drops/km) and the last 6 months.
+
+`zwift-stats dashboard` writes a self-contained HTML page to `~/.local/share/zwift-stats/dashboard.html` and opens it. It has:
+
+- **Range and name filters**: last 4 weeks to all time, plus a text filter (e.g. `Alpe` or `Makuri`) that applies to everything below
+- **Totals**: XP, Drops, XP/hr, XP/km, Drops/hr, Drops/km, distance and time for the range, each with this week and last week
+- **Per week**: any of those metrics as weekly bars, so you can see a given week at a glance
+- **Per ride**: any rate per ride with a 5-ride rolling average
+- **Cumulative XP and Drops** for the range
+- **By ride name**: every route you've ridden with its average rates, sortable, to find which rides pay best for XP or Drops
+- **Rides**: a sortable table of every ride with distance, time, climbing, power and all rates, linked to Strava
+
+Rates for a week or route are totals divided by total time or distance, so a two-hour ride weighs more than a twenty-minute one. Per-km rates only use rides that have a distance.
 
 ## Personal bests
 
-Personal bests are tracked globally across all rides in a local SQLite database at `~/.local/share/zwift-stats/bests.db`. Four metrics are tracked:
+Personal bests are tracked globally across all rides in a local SQLite database at `~/.local/share/zwift-stats/bests.db`. Six metrics are tracked:
 
 | Metric | Description |
 |---|---|
 | `xp_per_hour` | Best XP rate — favours intense, focused efforts |
 | `drops_per_hour` | Best Drops rate |
+| `xp_per_km` | Best XP per km (rides of 5 km or more) |
+| `drops_per_km` | Best Drops per km (rides of 5 km or more) — favours climbing |
 | `total_xp` | Most XP earned in a single ride — favours long rides |
 | `total_drops` | Most Drops earned in a single ride |
 
@@ -155,13 +159,15 @@ src/
   auth.ts         Strava OAuth flow
   watcher.ts      Watches ~/Documents/Zwift/Activities for new .fit files
   log-parser.ts   Extracts XP/Drops from ~/Documents/Zwift/Logs/Log.txt
-  fit-parser.ts   Extracts duration and start time from .fit files
+  fit-parser.ts   Extracts start time, duration, distance, climbing, power and HR from .fit files
   pipeline.ts     Orchestrates one ride end-to-end
   strava.ts       Strava API client (token refresh, activity match, update)
   bests.ts        SQLite personal bests store
   format.ts       Builds the description block string
   daemon.ts       Installs/uninstalls the macOS LaunchAgent
   backfill.ts     Scans all Zwift log files and processes historical rides
+  refresh.ts      Re-reads FIT files (and Strava names) for stored rides, rebuilds bests
   summary.ts      Terminal summary statistics
-  chart.ts        Generates browser-based XP/Drops charts
+  chart.ts        Writes the dashboard from the rides table
+  dashboard.html  Dashboard page template
 ```
