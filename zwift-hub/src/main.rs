@@ -71,7 +71,7 @@ enum Command {
     /// Record your XP and Drops totals if they changed (what the background agent runs). Doesn't
     /// touch the database, so it works while the app is open
     Snapshot,
-    /// The background agent that runs `snapshot` every few minutes, even when the app is closed
+    /// The background agent that runs `snapshot` every 15 minutes, even when the app is closed
     /// (macOS). The app installs it when you sign in
     Snapshots {
         #[command(subcommand)]
@@ -175,7 +175,7 @@ async fn run(cli: Cli) -> Result<()> {
                 ServiceAction::Install { .. } => {
                     let exe = std::env::current_exe()?.canonicalize()?;
                     service::install_snapshots(&exe, &data_dir)?;
-                    println!("Recording your totals every few minutes, even when the app is closed ({})", exe.display());
+                    println!("Recording your totals every 15 minutes, even when the app is closed ({})", exe.display());
                     Ok(())
                 }
                 ServiceAction::Uninstall => {

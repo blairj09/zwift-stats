@@ -1,7 +1,7 @@
 //! Runs `zwift-hub serve` in the background as a macOS LaunchAgent: it starts at login, restarts
 //! if it exits, and keeps the database current while the explorer stays at 127.0.0.1.
 //!
-//! A second, much lighter agent runs `zwift-hub snapshot` every few minutes to record your XP and
+//! A second, much lighter agent runs `zwift-hub snapshot` every 15 minutes to record your XP and
 //! Drops totals while the app is closed; see `companion::snapshot`.
 
 use std::fs;
@@ -12,9 +12,8 @@ use anyhow::{Context, Result, bail};
 
 const LABEL: &str = "com.github.blairj09.zwift-hub";
 const SNAPSHOT_LABEL: &str = "com.github.blairj09.zwift-hub.snapshot";
-/// launchd runs the snapshot this often; it asks Zwift every run while you ride, and only every
-/// ten minutes otherwise
-const SNAPSHOT_INTERVAL_S: u32 = 180;
+/// launchd runs the snapshot this often: four checks an hour
+const SNAPSHOT_INTERVAL_S: u32 = 900;
 
 fn agent_path(label: &str) -> Result<PathBuf> {
     let home = dirs::home_dir().context("no home folder")?;

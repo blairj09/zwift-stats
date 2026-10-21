@@ -8,7 +8,6 @@
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result, bail};
 use duckdb::{Connection, params};
@@ -318,11 +317,8 @@ pub async fn fetch(data_dir: &Path, full: bool) -> Result<Fetched> {
 
 /// Background snapshots of your totals, appended by `zwift-hub snapshot` from a LaunchAgent
 /// while the app may be closed (so without the database, which the app keeps locked). A line is
-/// written only when the totals or the riding state change; otherwise the file is just touched,
-/// so its age says when Zwift was last asked.
+/// written only when the totals or the riding state change.
 const SNAPSHOTS: &str = "totals.jsonl";
-/// How often to ask Zwift when you're not riding; while riding, every time the agent runs
-const IDLE_CHECK: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct Snapshot {
@@ -346,18 +342,14 @@ fn last_snapshot(path: &Path) -> Option<Snapshot> {
     serde_json::from_str(tail.lines().last()?).ok()
 }
 
-/// One cheap check of your totals. Returns what was written, or `None` when it skipped (not
-/// signed in, checked recently and not riding, or nothing changed).
+/// One cheap check of your totals. Returns what was written, or `None` when not signed in or
+/// nothing changed.
 pub async fn snapshot(data_dir: &Path) -> Result<Option<Snapshot>> {
     if !signed_in(data_dir) {
         return Ok(None);
     }
     let path = data_dir.join(SNAPSHOTS);
     let last = last_snapshot(&path);
-    let age = fs::metadata(&path).and_then(|m| m.modified()).ok().and_then(|t| SystemTime::now().duration_since(t).ok());
-    if last.as_ref().is_some_and(|l| !l.riding) && age.is_some_and(|a| a < IDLE_CHECK) {
-        return Ok(None);
-    }
     let client = client()?;
     let access = access_token(&client, data_dir).await?;
     let me = get(&client, &access, "/api/profiles/me").await?;
@@ -368,14 +360,13 @@ pub async fn snapshot(data_dir: &Path) -> Result<Option<Snapshot>> {
         achievement_level: int_at(&me, "achievementLevel"),
         riding: riding(&me),
     };
-    let mut f = fs::OpenOptions::new().create(true).append(true).open(&path)?;
     let unchanged = last.as_ref().is_some_and(|l| {
         (l.total_xp, l.drops, l.achievement_level, l.riding) == (snap.total_xp, snap.drops, snap.achievement_level, snap.riding)
     });
     if unchanged {
-        f.set_modified(SystemTime::now())?;
         return Ok(None);
     }
+    let mut f = fs::OpenOptions::new().create(true).append(true).open(&path)?;
     writeln!(f, "{}", serde_json::to_string(&snap)?)?;
     Ok(Some(snap))
 }
