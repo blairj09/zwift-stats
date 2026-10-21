@@ -1,4 +1,4 @@
-# zwift-hub
+# Zwift Stats (zwift-hub)
 
 A single Rust binary that imports everything Zwift leaves on your Mac into a local [DuckDB](https://duckdb.org) database and gives you a browser-based explorer for it: XP and Drops per ride, per week and per route, with per-hour and per-km rates, where your XP comes from, your level and Drops balance over time, and a SQL console.
 
@@ -8,11 +8,11 @@ Nothing leaves your machine. The server listens on `127.0.0.1` only.
 
 ```bash
 cd zwift-hub
-./macos/build-app.sh          # builds "Zwift Hub.app" into ~/Applications; the first build compiles DuckDB
-open ~/Applications/"Zwift Hub.app"
+./macos/build-app.sh          # builds "Zwift Stats.app" into ~/Applications; the first build compiles DuckDB
+open ~/Applications/"Zwift Stats.app"
 ```
 
-Zwift Hub opens in its own window with a Dock icon. On launch it imports your logs and rides, then keeps watching your Zwift folders while it's open: new rides and log lines are imported automatically (within about 15 seconds of Zwift going quiet, and every few minutes during a ride) and the window refreshes itself. The first launch may ask to access your Documents folder; allow it so it can read `Documents/Zwift`. The app opens no network port: its window talks to the database directly.
+Zwift Stats opens in its own window with a Dock icon. On launch it imports your logs and rides, then keeps watching your Zwift folders while it's open: new rides and log lines are imported automatically (within about 15 seconds of Zwift going quiet, and every few minutes during a ride) and the window refreshes itself. The first launch may ask to access your Documents folder; allow it so it can read `Documents/Zwift`. The app opens no network port: its window talks to the database directly.
 
 ## In a browser instead
 

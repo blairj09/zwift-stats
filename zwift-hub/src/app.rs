@@ -20,7 +20,7 @@ use crate::server;
 fn menu() -> Result<Menu> {
     let menu = Menu::new();
     let app = Submenu::with_items(
-        "Zwift Hub",
+        "Zwift Stats",
         true,
         &[
             &PredefinedMenuItem::about(None, None),
@@ -59,11 +59,11 @@ fn error_page(message: &str) -> String {
     let message = message.replace('&', "&amp;").replace('<', "&lt;");
     format!(
         "<!doctype html><meta charset=utf-8><body style=\"font: 15px -apple-system, sans-serif; padding: 40px; \
-         color: #333\"><h2>Zwift Hub couldn't start</h2><pre style=\"white-space: pre-wrap\">{message}</pre>"
+         color: #333\"><h2>Zwift Stats couldn't start</h2><pre style=\"white-space: pre-wrap\">{message}</pre>"
     )
 }
 
-/// What the window shows: the app's own routes, an already running Zwift Hub, or an error.
+/// What the window shows: the app's own routes, an already running Zwift Stats, or an error.
 enum Content {
     Routes(server::Running),
     Url(String),
@@ -98,7 +98,7 @@ pub fn run(db_path: &Path, paths: Paths) -> Result<()> {
     let menu = menu()?;
     menu.init_for_nsapp();
     let window = WindowBuilder::new()
-        .with_title("Zwift Hub")
+        .with_title("Zwift Stats")
         .with_inner_size(LogicalSize::new(1280.0, 860.0))
         .with_min_inner_size(LogicalSize::new(720.0, 520.0))
         .build(&event_loop)?;

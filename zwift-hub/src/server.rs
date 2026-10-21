@@ -132,7 +132,7 @@ pub async fn serve(conn: Connection, paths: Paths, port: u16, initial_import: bo
     // Loopback only: the database is personal and the SQL endpoint is unauthenticated
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    println!("Zwift Hub running at http://{addr}");
+    println!("Zwift Stats running at http://{addr}");
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -154,7 +154,7 @@ async fn local_only(headers: HeaderMap, req: Request, next: Next) -> Response {
     if header_ok(header::HOST, true) && header_ok(header::ORIGIN, false) {
         next.run(req).await
     } else {
-        (StatusCode::FORBIDDEN, "Zwift Hub only answers pages it served").into_response()
+        (StatusCode::FORBIDDEN, "Zwift Stats only answers pages it served").into_response()
     }
 }
 

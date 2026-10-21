@@ -1,10 +1,10 @@
 #!/bin/bash
-# Builds "Zwift Hub.app" and copies it to ~/Applications (or the folder given as $1).
+# Builds "Zwift Stats.app" and copies it to ~/Applications (or the folder given as $1).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 dest="${1:-$HOME/Applications}"
-app="target/release/Zwift Hub.app"
+app="target/release/Zwift Stats.app"
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 
 cargo build --release
@@ -27,8 +27,8 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>Zwift Hub</string>
-    <key>CFBundleDisplayName</key><string>Zwift Hub</string>
+    <key>CFBundleName</key><string>Zwift Stats</string>
+    <key>CFBundleDisplayName</key><string>Zwift Stats</string>
     <key>CFBundleIdentifier</key><string>com.github.blairj09.zwift-hub</string>
     <key>CFBundleExecutable</key><string>zwift-hub</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
@@ -38,7 +38,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key><string>11.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.healthcare-fitness</string>
     <key>NSHighResolutionCapable</key><true/>
-    <key>NSDocumentsFolderUsageDescription</key><string>Zwift Hub reads your Zwift logs and rides from Documents/Zwift.</string>
+    <key>NSDocumentsFolderUsageDescription</key><string>Zwift Stats reads your Zwift logs and rides from Documents/Zwift.</string>
 </dict>
 </plist>
 PLIST
@@ -48,6 +48,7 @@ PLIST
 codesign --force --deep --sign - "$app"
 
 mkdir -p "$dest"
-rm -rf "$dest/Zwift Hub.app"
+# The app was called Zwift Hub before; drop that copy so only one is installed
+rm -rf "$dest/Zwift Stats.app" "$dest/Zwift Hub.app"
 cp -R "$app" "$dest/"
-echo "Installed $dest/Zwift Hub.app"
+echo "Installed $dest/Zwift Stats.app"

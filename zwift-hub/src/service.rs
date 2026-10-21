@@ -82,7 +82,7 @@ pub fn install(serve_args: Vec<String>, data_dir: &Path) -> Result<()> {
         bail!("launchctl bootstrap failed: {}", String::from_utf8_lossy(&out.stderr).trim());
     }
     println!("Installed {}", path.display());
-    println!("Zwift Hub now runs in the background and starts at login. Log: {}", log.display());
+    println!("Zwift Stats now runs in the background and starts at login. Log: {}", log.display());
     Ok(())
 }
 

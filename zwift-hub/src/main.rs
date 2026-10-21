@@ -35,7 +35,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Open Zwift Hub in its own window (macOS). This is what the app bundle runs
+    /// Open Zwift Stats in its own window (macOS). This is what the app bundle runs
     App,
     /// Archive new game logs and import logs, FIT files and legacy rides
     Import,
@@ -168,7 +168,7 @@ async fn run(cli: Cli) -> Result<()> {
     // DuckDB allows one process per database file, so a running `serve` holds it
     let conn = db::open(&db_path).with_context(|| {
         format!(
-            "opening {} (if Zwift Hub is already running, use its Explore tab at http://127.0.0.1:7878)",
+            "opening {} (if Zwift Stats is already running, use its Explore tab at http://127.0.0.1:7878)",
             db_path.display()
         )
     })?;
