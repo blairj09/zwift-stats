@@ -89,6 +89,13 @@ CREATE TABLE IF NOT EXISTS zwift_profile (
     fetched_at TIMESTAMP, raw VARCHAR
 );
 
+-- Your XP and Drops totals at each sync. Between two of them, if you rode only once, the
+-- difference is what that ride earned: the only way to know earnings for rides recorded on
+-- another device, which leave no game log on this Mac.
+CREATE TABLE IF NOT EXISTS zwift_profile_history (
+    fetched_at TIMESTAMP PRIMARY KEY, total_xp BIGINT, drops BIGINT, achievement_level BIGINT
+);
+
 CREATE TABLE IF NOT EXISTS zwift_activities (
     id VARCHAR PRIMARY KEY, name VARCHAR, start_utc TIMESTAMP, end_utc TIMESTAMP, distance_m DOUBLE,
     elevation_m DOUBLE, avg_watts DOUBLE, calories DOUBLE, moving_s DOUBLE, sport VARCHAR,
@@ -108,8 +115,10 @@ CREATE TABLE IF NOT EXISTS zwift_events (
 "#;
 
 /// Every ride, whichever sources know about it. Earnings come from the game log when it still
-/// exists, else from the legacy database; ride metrics prefer the FIT file.
-const RIDES_VIEW: &str = r#"
+/// exists, else from the legacy database; ride metrics prefer the FIT file. Rides only Zwift's
+/// API knows about (recorded on a phone, Apple TV or another computer) come last, with XP and
+/// Drops estimated from the change in your totals around them.
+pub const RIDES_VIEW: &str = r#"
 CREATE OR REPLACE VIEW rides AS
 WITH joined AS (
     SELECT
@@ -141,6 +150,54 @@ WITH joined AS (
     FROM activities a
     FULL OUTER JOIN fit_files f ON f.fit_file = a.fit_file
     LEFT JOIN legacy_rides l ON l.fit_file = coalesce(a.fit_file, f.fit_file)
+),
+-- Known totals over time: each sync, plus the before and after of every logged ride
+totals AS (
+    SELECT fetched_at AS t, total_xp AS xp, drops FROM zwift_profile_history
+    UNION ALL SELECT start_utc, start_total_xp, start_drops FROM activities WHERE start_total_xp IS NOT NULL
+    UNION ALL SELECT end_utc, end_total_xp, end_drops FROM activities WHERE end_total_xp IS NOT NULL
+),
+api AS (
+    SELECT z.*, coalesce(z.end_utc, z.start_utc + to_seconds(coalesce(z.moving_s, 0)::BIGINT)) AS finish
+    FROM zwift_activities z
+    WHERE z.start_utc IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM joined j WHERE abs(epoch(j.start_utc) - epoch(z.start_utc)) <= 300)
+),
+api_before AS (
+    SELECT api.*, b.t AS t0, b.xp AS xp0, b.drops AS drops0
+    FROM api ASOF LEFT JOIN totals b ON api.start_utc >= b.t
+),
+api_totals AS (
+    SELECT ab.*, a.t AS t1, a.xp AS xp1, a.drops AS drops1,
+        (SELECT count(*) FROM zwift_activities o WHERE o.start_utc > ab.t0 AND o.start_utc < a.t) AS rides_between
+    FROM api_before ab ASOF LEFT JOIN totals a ON ab.finish <= a.t
+),
+api_rides AS (
+    SELECT
+        start_utc, NULL AS fit_file, name AS title,
+        regexp_extract(name, '^Zwift - (?:.*: )?(.*?)( in [A-Z][A-Za-z ]+)?$', 1) AS route,
+        nullif(regexp_extract(name, ' in ([A-Z][A-Za-z ]+)$', 1), '') AS world,
+        CASE WHEN name ILIKE '%pacer%' THEN 'Pacer group ride'
+             WHEN name ILIKE '%race%' THEN 'Race'
+             WHEN name ILIKE '%group ride%' THEN 'Group ride'
+             WHEN name ILIKE '%workout%' OR name ILIKE 'TrainerRoad%' THEN 'Workout'
+             ELSE 'Free ride' END AS kind,
+        upper(sport) AS sport, NULL AS event_name,
+        -- Only when this was the sole ride between two known totals; Drops can also fall from
+        -- spending them, so a drop in the balance gives no estimate
+        CASE WHEN rides_between = 1 AND xp1 >= xp0 THEN xp1 - xp0 END AS xp,
+        CASE WHEN rides_between = 1 AND drops1 >= drops0 THEN drops1 - drops0 END AS drops,
+        epoch(finish) - epoch(start_utc) AS duration_s, moving_s, distance_m, elevation_m, calories,
+        avg_watts AS avg_power, NULL AS max_power, NULL AS normalized_power, NULL AS avg_hr, NULL AS max_hr,
+        NULL AS avg_cadence, NULL AS level, NULL AS total_xp, NULL AS total_drops, NULL AS streak_weeks,
+        ride_ons AS ride_ons_received, NULL AS ride_ons_given, NULL AS strava_activity_id,
+        'api' AS earnings_source
+    FROM api_totals
+),
+all_rides AS (
+    SELECT * FROM joined
+    UNION ALL BY NAME
+    SELECT * FROM api_rides
 )
 SELECT *,
     distance_m / 1000                                      AS km,
@@ -150,7 +207,7 @@ SELECT *,
     xp    / nullif(distance_m / 1000, 0)                   AS xp_per_km,
     drops / nullif(distance_m / 1000, 0)                   AS drops_per_km,
     drops / nullif(elevation_m, 0)                         AS drops_per_m_climbed
-FROM joined
+FROM all_rides
 WHERE duration_s >= 60 OR xp > 0
 "#;
 

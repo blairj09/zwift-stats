@@ -28,6 +28,8 @@ struct AppState {
     /// Bumped after every import, so open explorer pages know to reload
     imports: AtomicU64,
     last_import: Mutex<Option<String>>,
+    /// Background syncs have nowhere else to report; the Companion tab shows this
+    last_sync_error: Mutex<Option<String>>,
 }
 
 impl AppState {
@@ -40,11 +42,19 @@ impl AppState {
     }
 
     async fn sync(&self) -> Result<companion::SyncReport> {
-        let fetched = companion::fetch(&self.paths.data_dir).await?;
-        let conn = self.conn.lock().unwrap();
-        let report = companion::store(&conn, &fetched)?;
+        let result = async {
+            let fetched = companion::fetch(&self.paths.data_dir).await?;
+            let conn = self.conn.lock().unwrap();
+            companion::store(&conn, &fetched)
+        }
+        .await;
+        *self.last_sync_error.lock().unwrap() = match &result {
+            Err(e) => Some(format!("{e:#}")),
+            Ok(r) if !r.problems.is_empty() => Some(r.problems.join("; ")),
+            Ok(_) => None,
+        };
         self.imports.fetch_add(1, Ordering::Relaxed);
-        Ok(report)
+        result
     }
 }
 
@@ -81,6 +91,7 @@ pub fn start(conn: Connection, paths: Paths, initial_import: bool, watch: bool) 
         paths,
         imports: AtomicU64::new(0),
         last_import: Mutex::new(None),
+        last_sync_error: Mutex::new(None),
     });
     if initial_import {
         crate::print_report(&state.import()?);
@@ -232,7 +243,7 @@ async fn run_import(State(state): State<Shared>) -> Response {
 
 async fn run_sync(State(state): State<Shared>) -> Response {
     match state.sync().await {
-        Ok(r) => Json(json!({ "activities": r.activities, "followers": r.followers, "followees": r.followees, "events": r.events }))
+        Ok(r) => Json(json!({ "activities": r.activities, "followers": r.followers, "followees": r.followees, "events": r.events, "problems": r.problems }))
             .into_response(),
         Err(e) => error(format!("{e:#}")),
     }
@@ -258,7 +269,7 @@ async fn login(State(state): State<Shared>, Json(req): Json<LoginRequest>) -> Re
 async fn logout(State(state): State<Shared>) -> Response {
     // Signing out also forgets what was fetched with that sign-in
     let cleared = state.conn.lock().unwrap().execute_batch(
-        "DELETE FROM zwift_profile; DELETE FROM zwift_activities; DELETE FROM zwift_follows; DELETE FROM zwift_events;",
+        "DELETE FROM zwift_profile; DELETE FROM zwift_profile_history; DELETE FROM zwift_activities; DELETE FROM zwift_follows; DELETE FROM zwift_events;",
     );
     match companion::sign_out(&state.paths.data_dir).and_then(|_| Ok(cleared?)) {
         Ok(_) => {
@@ -277,6 +288,7 @@ async fn companion_data(State(state): State<Shared>) -> Response {
     let result = (|| -> Result<Value> {
         Ok(json!({
             "signed_in": companion::signed_in(&state.paths.data_dir),
+            "sync_error": *state.last_sync_error.lock().unwrap(),
             "profile": q("SELECT * EXCLUDE (raw) FROM zwift_profile")?,
             "riding_now": q("SELECT first_name, last_name, country, world_id FROM zwift_follows
                              WHERE direction = 'followee' AND riding ORDER BY first_name")?,

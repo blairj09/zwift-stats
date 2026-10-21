@@ -42,6 +42,8 @@ pub struct SyncReport {
     pub followers: usize,
     pub followees: usize,
     pub events: usize,
+    /// Lists that couldn't be fetched this time; the rest was still saved
+    pub problems: Vec<String>,
 }
 
 fn token_path(data_dir: &Path) -> PathBuf {
@@ -182,18 +184,67 @@ async fn get(client: &reqwest::Client, access: &str, path: &str) -> Result<Value
         .await?;
     let status = resp.status();
     if !status.is_success() {
-        bail!("GET {path}: {status}");
+        let body = resp.text().await.unwrap_or_default();
+        bail!("GET {path}: {status} {}", body.chars().take(300).collect::<String>().trim());
     }
     Ok(resp.json().await?)
 }
 
+const PAGE: usize = 20;
+
+/// Your activities from every device. Zwift has served this list from two places over the
+/// years; try the profile list first, then the Companion app's own feed.
+async fn fetch_activities(client: &reqwest::Client, access: &str, id: i64) -> Result<Vec<Value>> {
+    let as_list = |v: Value| v.as_array().cloned().unwrap_or_default();
+    let mut activities = Vec::new();
+    let first = get(client, access, &format!("/api/profiles/{id}/activities?start=0&limit={PAGE}")).await;
+    match first {
+        Ok(page) => {
+            let mut page = as_list(page);
+            loop {
+                let n = page.len();
+                activities.extend(page);
+                if n < PAGE || activities.len() >= MAX_ACTIVITIES {
+                    return Ok(activities);
+                }
+                page = as_list(
+                    get(client, access, &format!("/api/profiles/{id}/activities?start={}&limit={PAGE}", activities.len()))
+                        .await?,
+                );
+            }
+        }
+        Err(profile_err) => {
+            let feed = "/api/activity-feed/feed/?includeInProgress=false&feedType=JUST_ME";
+            let mut path = format!("{feed}&limit={PAGE}");
+            loop {
+                let page = match get(client, access, &path).await {
+                    Ok(v) => as_list(v),
+                    Err(e) if activities.is_empty() => bail!("{profile_err}; feed: {e}"),
+                    Err(e) => return Err(e),
+                };
+                let n = page.len();
+                let last = page.last().and_then(|a| str_at(a, "id_str").or_else(|| str_at(a, "id")));
+                activities.extend(page);
+                match last {
+                    Some(last) if n == PAGE && activities.len() < MAX_ACTIVITIES => {
+                        path = format!("{feed}&limit={PAGE}&start_after_activity_id={last}");
+                    }
+                    _ => return Ok(activities),
+                }
+            }
+        }
+    }
+}
+
 /// Everything fetched in one sync, gathered before the database is touched so the write is quick.
+/// A list that failed to fetch is `None` and leaves what's stored untouched.
 pub struct Fetched {
     me: Value,
-    activities: Vec<Value>,
-    followers: Vec<Value>,
-    followees: Vec<Value>,
-    events: Vec<Value>,
+    activities: Option<Vec<Value>>,
+    followers: Option<Vec<Value>>,
+    followees: Option<Vec<Value>>,
+    events: Option<Vec<Value>>,
+    problems: Vec<String>,
 }
 
 pub async fn fetch(data_dir: &Path) -> Result<Fetched> {
@@ -202,27 +253,20 @@ pub async fn fetch(data_dir: &Path) -> Result<Fetched> {
     let me = get(&client, &access, "/api/profiles/me").await?;
     let id = me.get("id").and_then(Value::as_i64).context("profile has no id")?;
 
-    let mut activities = Vec::new();
-    while activities.len() < MAX_ACTIVITIES {
-        let page = get(&client, &access, &format!("/api/profiles/{id}/activities?start={}&limit=100", activities.len())).await?;
-        let page = page.as_array().cloned().unwrap_or_default();
-        let n = page.len();
-        activities.extend(page);
-        if n < 100 {
-            break;
-        }
-    }
-    let list = |v: Value| v.as_array().cloned().unwrap_or_default();
-    let followers = list(get(&client, &access, &format!("/api/profiles/{id}/followers?start=0&limit=2000")).await?);
-    let followees = list(get(&client, &access, &format!("/api/profiles/{id}/followees?start=0&limit=2000")).await?);
-    let events = match get(&client, &access, "/api/public/events/upcoming").await {
-        Ok(v) => list(v),
+    let mut problems = Vec::new();
+    let mut keep = |what: &str, r: Result<Vec<Value>>| match r {
+        Ok(v) => Some(v),
         Err(e) => {
-            eprintln!("events: {e}");
-            Vec::new()
+            problems.push(format!("{what}: {e:#}"));
+            None
         }
     };
-    Ok(Fetched { me, activities, followers, followees, events })
+    let list = |r: Result<Value>| r.map(|v| v.as_array().cloned().unwrap_or_default());
+    let activities = keep("activities", fetch_activities(&client, &access, id).await);
+    let followers = keep("followers", list(get(&client, &access, &format!("/api/profiles/{id}/followers?start=0&limit=200")).await));
+    let followees = keep("following", list(get(&client, &access, &format!("/api/profiles/{id}/followees?start=0&limit=200")).await));
+    let events = keep("events", list(get(&client, &access, "/api/public/events/upcoming").await));
+    Ok(Fetched { me, activities, followers, followees, events, problems })
 }
 
 fn str_at(v: &Value, key: &str) -> Option<String> {
@@ -259,6 +303,13 @@ pub fn store(conn: &Connection, f: &Fetched) -> Result<SyncReport> {
     conn.execute_batch("BEGIN TRANSACTION")?;
     let me = &f.me;
     let social = me.get("socialFacts").cloned().unwrap_or(Value::Null);
+    conn.execute(
+        "INSERT OR REPLACE INTO zwift_profile_history VALUES (CAST(? AS TIMESTAMP), ?, ?, ?)",
+        params![
+            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            int_at(me, "totalExperiencePoints"), int_at(me, "totalGold"), int_at(me, "achievementLevel")
+        ],
+    )?;
     conn.execute("DELETE FROM zwift_profile", [])?;
     conn.execute(
         "INSERT INTO zwift_profile VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, current_timestamp, ?)",
@@ -272,7 +323,7 @@ pub fn store(conn: &Connection, f: &Fetched) -> Result<SyncReport> {
         ],
     )?;
 
-    for a in &f.activities {
+    for a in f.activities.iter().flatten() {
         let Some(id) = str_at(a, "id_str").or_else(|| str_at(a, "id")) else { continue };
         conn.execute(
             "INSERT OR REPLACE INTO zwift_activities VALUES (?, ?, CAST(? AS TIMESTAMP), CAST(? AS TIMESTAMP), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -286,11 +337,12 @@ pub fn store(conn: &Connection, f: &Fetched) -> Result<SyncReport> {
         )?;
     }
 
-    conn.execute("DELETE FROM zwift_follows", [])?;
     for (direction, rows, profile_key, id_key) in [
         ("follower", &f.followers, "followerProfile", "followerId"),
         ("followee", &f.followees, "followeeProfile", "followeeId"),
     ] {
+        let Some(rows) = rows else { continue };
+        conn.execute("DELETE FROM zwift_follows WHERE direction = ?", params![direction])?;
         for row in rows {
             let p = row.get(profile_key).cloned().unwrap_or(Value::Null);
             let Some(profile_id) = int_at(row, id_key).or_else(|| int_at(&p, "id")) else { continue };
@@ -308,7 +360,7 @@ pub fn store(conn: &Connection, f: &Fetched) -> Result<SyncReport> {
     // DuckDB's bundled build has no time-zone functions, so the cutoff is computed here
     let cutoff = (chrono::Utc::now() - chrono::Duration::days(1)).format("%Y-%m-%d %H:%M:%S").to_string();
     conn.execute("DELETE FROM zwift_events WHERE start_utc < CAST(? AS TIMESTAMP)", params![cutoff])?;
-    for e in &f.events {
+    for e in f.events.iter().flatten() {
         if int_at(e, "id").is_none() {
             continue;
         }
@@ -322,11 +374,13 @@ pub fn store(conn: &Connection, f: &Fetched) -> Result<SyncReport> {
         )?;
     }
     conn.execute_batch("COMMIT")?;
+    let n = |v: &Option<Vec<Value>>| v.as_ref().map_or(0, Vec::len);
     Ok(SyncReport {
-        activities: f.activities.len(),
-        followers: f.followers.len(),
-        followees: f.followees.len(),
-        events: f.events.len(),
+        activities: n(&f.activities),
+        followers: n(&f.followers),
+        followees: n(&f.followees),
+        events: n(&f.events),
+        problems: f.problems.clone(),
     })
 }
 
@@ -349,11 +403,12 @@ mod tests {
         let f = Fetched {
             me: json!({ "id": 42, "firstName": "James", "weight": 75000, "totalGold": 123456,
                         "socialFacts": { "followersCount": 10, "followeesCount": 12 } }),
-            activities: vec![json!({ "id_str": "999", "name": "Zwift - Watopia", "startDate": "2026-10-15T13:58:38.000+0000",
-                                     "distanceInMeters": 30000.5, "activityRideOnCount": 7 })],
-            followers: vec![json!({ "followerId": 7, "followerProfile": { "firstName": "A", "riding": true, "worldId": 1 } })],
-            followees: vec![],
-            events: vec![json!({ "id": 5, "name": "Group Ride", "eventStart": "2099-01-01T10:00:00.000+0000", "sport": "CYCLING" })],
+            problems: vec![],
+            activities: Some(vec![json!({ "id_str": "999", "name": "Zwift - Watopia", "startDate": "2026-10-15T13:58:38.000+0000",
+                                     "distanceInMeters": 30000.5, "activityRideOnCount": 7 })]),
+            followers: Some(vec![json!({ "followerId": 7, "followerProfile": { "firstName": "A", "riding": true, "worldId": 1 } })]),
+            followees: None,
+            events: Some(vec![json!({ "id": 5, "name": "Group Ride", "eventStart": "2099-01-01T10:00:00.000+0000", "sport": "CYCLING" })]),
         };
         let r = store(&conn, &f).unwrap();
         assert_eq!((r.activities, r.followers, r.events), (1, 1, 1));
@@ -363,4 +418,37 @@ mod tests {
         let ride_ons: i64 = conn.query_row("SELECT ride_ons FROM zwift_activities", [], |r| r.get(0)).unwrap();
         assert_eq!(ride_ons, 7);
     }
+
+    #[test]
+    fn api_only_rides_join_the_ride_list_with_estimated_earnings() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(crate::db::SCHEMA).unwrap();
+        conn.execute_batch(crate::db::RIDES_VIEW).unwrap();
+        conn.execute_batch(
+            "INSERT INTO zwift_profile_history VALUES
+                ('2026-10-20 06:00:00', 1000, 500, NULL),
+                ('2026-10-20 09:00:00', 1600, 800, NULL),
+                ('2026-10-22 09:00:00', 2600, 900, NULL);
+             INSERT INTO zwift_activities (id, name, start_utc, end_utc, distance_m, sport) VALUES
+                ('1', 'Zwift - Group Ride: Tempus Fugit in Watopia', '2026-10-20 07:00:00', '2026-10-20 08:00:00', 40000, 'CYCLING'),
+                ('2', 'Zwift - Volcano Flat in Watopia', '2026-10-21 07:00:00', '2026-10-21 08:00:00', 30000, 'CYCLING'),
+                ('3', 'Zwift - Makuri 40 in Makuri Islands', '2026-10-21 18:00:00', '2026-10-21 19:00:00', 30000, 'CYCLING');",
+        )
+        .unwrap();
+        let rows: Vec<(String, Option<String>, Option<i64>, Option<i64>, String)> = conn
+            .prepare("SELECT title, world, xp, drops, kind FROM rides WHERE earnings_source = 'api' ORDER BY start_utc")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(rows.len(), 3);
+        // Alone between two syncs: the change in totals is what it earned
+        assert_eq!((rows[0].2, rows[0].3), (Some(600), Some(300)));
+        assert_eq!(rows[0].1.as_deref(), Some("Watopia"));
+        assert_eq!(rows[0].4, "Group ride");
+        // Two rides between the same syncs can't be told apart
+        assert_eq!((rows[1].2, rows[2].2), (None, None));
+    }
+
 }

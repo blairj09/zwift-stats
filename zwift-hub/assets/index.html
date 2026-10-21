@@ -685,6 +685,7 @@ function renderCompanion() {
   const c = companion, p = c.profile[0];
   document.getElementById('signin').hidden = c.signed_in;
   document.getElementById('signedInAs').hidden = !c.signed_in;
+  document.getElementById('syncInfo').textContent = c.sync_error ? `Last sync failed: ${c.sync_error}` : '';
   document.getElementById('signedInName').textContent = p ? `Signed in to Zwift as ${p.first_name ?? ''} ${p.last_name ?? ''}` : 'Signed in to Zwift';
   document.getElementById('profileTiles').innerHTML = !p ? '' : [
     ['Rider', esc(`${p.first_name ?? ''} ${p.last_name ?? ''}`), p.ftp ? `FTP ${fmt0(p.ftp)} W${p.weight_kg ? ` · ${fmt1(p.ftp / p.weight_kg)} W/kg` : ''}` : ''],

@@ -101,6 +101,9 @@ pub fn print_sync(r: &companion::SyncReport) {
         "Synced from Zwift: profile, {} activities, {} followers, {} following, {} upcoming events",
         r.activities, r.followers, r.followees, r.events
     );
+    for p in &r.problems {
+        eprintln!("  couldn't fetch {p}");
+    }
 }
 
 fn main() -> Result<()> {
