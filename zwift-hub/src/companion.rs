@@ -6,8 +6,9 @@
 //! saved (readable by you alone). The password is never written anywhere.
 
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result, bail};
 use duckdb::{Connection, params};
@@ -28,12 +29,19 @@ const MAX_ACTIVITIES: usize = 2000;
 struct SavedToken {
     refresh_token: String,
     saved_at: String,
+    /// The last access token and when it expires (Unix seconds), so frequent snapshots don't
+    /// need a token refresh each time
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    access_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    access_expires: Option<i64>,
 }
 
 #[derive(Deserialize)]
 struct TokenResponse {
     access_token: String,
     refresh_token: Option<String>,
+    expires_in: Option<i64>,
 }
 
 #[derive(Debug, Default)]
@@ -54,13 +62,19 @@ pub fn signed_in(data_dir: &Path) -> bool {
     token_path(data_dir).exists()
 }
 
-fn save_token(data_dir: &Path, refresh_token: &str) -> Result<()> {
+/// The app and the background snapshot both refresh the token, and Zwift rotates the refresh
+/// token each time; holding this lock around read, refresh and save keeps the newest one.
+fn lock_token(data_dir: &Path) -> Result<fs::File> {
     fs::create_dir_all(data_dir)?;
+    let lock = fs::OpenOptions::new().create(true).truncate(false).write(true).open(data_dir.join("zwift-token.lock"))?;
+    lock.lock()?;
+    Ok(lock)
+}
+
+/// Written to a temporary file and renamed into place, so a reader never sees half a token.
+fn write_token(data_dir: &Path, token: &SavedToken) -> Result<()> {
     let path = token_path(data_dir);
-    let body = serde_json::to_vec_pretty(&SavedToken {
-        refresh_token: refresh_token.to_string(),
-        saved_at: chrono::Utc::now().to_rfc3339(),
-    })?;
+    let tmp = path.with_extension("json.tmp");
     let mut opts = fs::OpenOptions::new();
     opts.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -68,14 +82,28 @@ fn save_token(data_dir: &Path, refresh_token: &str) -> Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    opts.open(&path)?.write_all(&body)?;
+    opts.open(&tmp)?.write_all(&serde_json::to_vec_pretty(token)?)?;
     #[cfg(unix)]
     {
-        // `mode` applies only when the file is created; tighten an existing file too
+        // `mode` applies only when the file is created; tighten a leftover file too
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
     }
+    fs::rename(&tmp, &path)?;
     Ok(())
+}
+
+fn save_token(data_dir: &Path, refresh_token: &str) -> Result<()> {
+    let _lock = lock_token(data_dir)?;
+    write_token(
+        data_dir,
+        &SavedToken {
+            refresh_token: refresh_token.to_string(),
+            saved_at: chrono::Utc::now().to_rfc3339(),
+            access_token: None,
+            access_expires: None,
+        },
+    )
 }
 
 fn client() -> Result<reqwest::Client> {
@@ -138,11 +166,14 @@ pub async fn login(data_dir: &Path) -> Result<()> {
 
 /// Removes the saved sign-in; returns whether there was one.
 pub fn sign_out(data_dir: &Path) -> Result<bool> {
+    let _lock = lock_token(data_dir)?;
     let path = token_path(data_dir);
     let existed = path.exists();
     if existed {
         fs::remove_file(&path)?;
     }
+    // The totals belong to that sign-in too
+    let _ = fs::remove_file(data_dir.join(SNAPSHOTS));
     Ok(existed)
 }
 
@@ -160,7 +191,14 @@ async fn access_token(client: &reqwest::Client, data_dir: &Path) -> Result<Strin
     if !path.exists() {
         bail!("not signed in to Zwift; run `zwift-hub login`");
     }
+    let _lock = lock_token(data_dir)?;
     let saved: SavedToken = serde_json::from_slice(&fs::read(&path)?)?;
+    let now = chrono::Utc::now().timestamp();
+    if let (Some(access), Some(expires)) = (&saved.access_token, saved.access_expires) {
+        if expires > now + 60 {
+            return Ok(access.clone());
+        }
+    }
     let token = request_token(
         client,
         &[("client_id", CLIENT_ID), ("grant_type", "refresh_token"), ("refresh_token", &saved.refresh_token)],
@@ -168,9 +206,16 @@ async fn access_token(client: &reqwest::Client, data_dir: &Path) -> Result<Strin
     .await
     .context("refreshing the Zwift sign-in failed; run `zwift-hub login` again")?;
     // Zwift rotates refresh tokens; keep the newest so the sign-in doesn't lapse
-    if let Some(r) = token.refresh_token.filter(|r| *r != saved.refresh_token) {
-        save_token(data_dir, &r)?;
-    }
+    let rotated = token.refresh_token.clone().filter(|r| *r != saved.refresh_token);
+    write_token(
+        data_dir,
+        &SavedToken {
+            saved_at: if rotated.is_some() { chrono::Utc::now().to_rfc3339() } else { saved.saved_at },
+            refresh_token: rotated.unwrap_or(saved.refresh_token),
+            access_token: Some(token.access_token.clone()),
+            access_expires: token.expires_in.map(|s| now + s),
+        },
+    )?;
     Ok(token.access_token)
 }
 
@@ -194,7 +239,7 @@ const PAGE: usize = 20;
 
 /// Your activities from every device. Zwift has served this list from two places over the
 /// years; try the profile list first, then the Companion app's own feed.
-async fn fetch_activities(client: &reqwest::Client, access: &str, id: i64) -> Result<Vec<Value>> {
+async fn fetch_activities(client: &reqwest::Client, access: &str, id: i64, max: usize) -> Result<Vec<Value>> {
     let as_list = |v: Value| v.as_array().cloned().unwrap_or_default();
     let mut activities = Vec::new();
     let first = get(client, access, &format!("/api/profiles/{id}/activities?start=0&limit={PAGE}")).await;
@@ -204,7 +249,7 @@ async fn fetch_activities(client: &reqwest::Client, access: &str, id: i64) -> Re
             loop {
                 let n = page.len();
                 activities.extend(page);
-                if n < PAGE || activities.len() >= MAX_ACTIVITIES {
+                if n < PAGE || activities.len() >= max {
                     return Ok(activities);
                 }
                 page = as_list(
@@ -226,7 +271,7 @@ async fn fetch_activities(client: &reqwest::Client, access: &str, id: i64) -> Re
                 let last = page.last().and_then(|a| str_at(a, "id_str").or_else(|| str_at(a, "id")));
                 activities.extend(page);
                 match last {
-                    Some(last) if n == PAGE && activities.len() < MAX_ACTIVITIES => {
+                    Some(last) if n == PAGE && activities.len() < max => {
                         path = format!("{feed}&limit={PAGE}&start_after_activity_id={last}");
                     }
                     _ => return Ok(activities),
@@ -247,7 +292,9 @@ pub struct Fetched {
     problems: Vec<String>,
 }
 
-pub async fn fetch(data_dir: &Path) -> Result<Fetched> {
+/// `full` pages through every activity; otherwise only the newest page, which is all that can
+/// have changed since the last sync.
+pub async fn fetch(data_dir: &Path, full: bool) -> Result<Fetched> {
     let client = client()?;
     let access = access_token(&client, data_dir).await?;
     let me = get(&client, &access, "/api/profiles/me").await?;
@@ -262,11 +309,89 @@ pub async fn fetch(data_dir: &Path) -> Result<Fetched> {
         }
     };
     let list = |r: Result<Value>| r.map(|v| v.as_array().cloned().unwrap_or_default());
-    let activities = keep("activities", fetch_activities(&client, &access, id).await);
+    let activities = keep("activities", fetch_activities(&client, &access, id, if full { MAX_ACTIVITIES } else { PAGE }).await);
     let followers = keep("followers", list(get(&client, &access, &format!("/api/profiles/{id}/followers?start=0&limit=200")).await));
     let followees = keep("following", list(get(&client, &access, &format!("/api/profiles/{id}/followees?start=0&limit=200")).await));
     let events = keep("events", list(get(&client, &access, "/api/public/events/upcoming").await));
     Ok(Fetched { me, activities, followers, followees, events, problems })
+}
+
+/// Background snapshots of your totals, appended by `zwift-hub snapshot` from a LaunchAgent
+/// while the app may be closed (so without the database, which the app keeps locked). A line is
+/// written only when the totals or the riding state change; otherwise the file is just touched,
+/// so its age says when Zwift was last asked.
+const SNAPSHOTS: &str = "totals.jsonl";
+/// How often to ask Zwift when you're not riding; while riding, every time the agent runs
+const IDLE_CHECK: Duration = Duration::from_secs(10 * 60);
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+pub struct Snapshot {
+    pub fetched_at: String,
+    pub total_xp: Option<i64>,
+    pub drops: Option<i64>,
+    pub achievement_level: Option<i64>,
+    pub riding: bool,
+}
+
+fn riding(me: &Value) -> bool {
+    bool_at(me, "riding").unwrap_or(false) || me.get("currentActivityId").is_some_and(|v| !v.is_null())
+}
+
+fn last_snapshot(path: &Path) -> Option<Snapshot> {
+    let mut f = fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(len.saturating_sub(1024))).ok()?;
+    let mut tail = String::new();
+    f.read_to_string(&mut tail).ok()?;
+    serde_json::from_str(tail.lines().last()?).ok()
+}
+
+/// One cheap check of your totals. Returns what was written, or `None` when it skipped (not
+/// signed in, checked recently and not riding, or nothing changed).
+pub async fn snapshot(data_dir: &Path) -> Result<Option<Snapshot>> {
+    if !signed_in(data_dir) {
+        return Ok(None);
+    }
+    let path = data_dir.join(SNAPSHOTS);
+    let last = last_snapshot(&path);
+    let age = fs::metadata(&path).and_then(|m| m.modified()).ok().and_then(|t| SystemTime::now().duration_since(t).ok());
+    if last.as_ref().is_some_and(|l| !l.riding) && age.is_some_and(|a| a < IDLE_CHECK) {
+        return Ok(None);
+    }
+    let client = client()?;
+    let access = access_token(&client, data_dir).await?;
+    let me = get(&client, &access, "/api/profiles/me").await?;
+    let snap = Snapshot {
+        fetched_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        total_xp: int_at(&me, "totalExperiencePoints"),
+        drops: int_at(&me, "totalGold"),
+        achievement_level: int_at(&me, "achievementLevel"),
+        riding: riding(&me),
+    };
+    let mut f = fs::OpenOptions::new().create(true).append(true).open(&path)?;
+    let unchanged = last.as_ref().is_some_and(|l| {
+        (l.total_xp, l.drops, l.achievement_level, l.riding) == (snap.total_xp, snap.drops, snap.achievement_level, snap.riding)
+    });
+    if unchanged {
+        f.set_modified(SystemTime::now())?;
+        return Ok(None);
+    }
+    writeln!(f, "{}", serde_json::to_string(&snap)?)?;
+    Ok(Some(snap))
+}
+
+/// Adds snapshots newer than the last one stored to `zwift_profile_history`, which the rides
+/// view uses to estimate what rides on other devices earned.
+pub fn fold_snapshots(conn: &Connection, data_dir: &Path) -> Result<usize> {
+    let Ok(text) = fs::read_to_string(data_dir.join(SNAPSHOTS)) else { return Ok(0) };
+    let mut n = 0;
+    for snap in text.lines().filter_map(|l| serde_json::from_str::<Snapshot>(l).ok()) {
+        n += conn.execute(
+            "INSERT OR IGNORE INTO zwift_profile_history VALUES (CAST(? AS TIMESTAMP), ?, ?, ?)",
+            params![snap.fetched_at.trim_end_matches('Z').replace('T', " "), snap.total_xp, snap.drops, snap.achievement_level],
+        )?;
+    }
+    Ok(n)
 }
 
 fn str_at(v: &Value, key: &str) -> Option<String> {
@@ -417,6 +542,25 @@ mod tests {
         assert_eq!((w, drops), (75.0, 123456));
         let ride_ons: i64 = conn.query_row("SELECT ride_ons FROM zwift_activities", [], |r| r.get(0)).unwrap();
         assert_eq!(ride_ons, 7);
+    }
+
+    #[test]
+    fn folds_snapshots_once() {
+        let dir = std::env::temp_dir().join(format!("zwift-hub-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let line = |t: &str, xp: i64| {
+            serde_json::to_string(&Snapshot {
+                fetched_at: t.into(), total_xp: Some(xp), drops: Some(5), achievement_level: None, riding: false,
+            })
+            .unwrap()
+        };
+        fs::write(dir.join(SNAPSHOTS), format!("{}\n{}\n", line("2026-10-21T20:00:00Z", 1), line("2026-10-21T21:00:00Z", 2))).unwrap();
+        assert_eq!(last_snapshot(&dir.join(SNAPSHOTS)).unwrap().total_xp, Some(2));
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(crate::db::SCHEMA).unwrap();
+        assert_eq!(fold_snapshots(&conn, &dir).unwrap(), 2);
+        assert_eq!(fold_snapshots(&conn, &dir).unwrap(), 0);
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

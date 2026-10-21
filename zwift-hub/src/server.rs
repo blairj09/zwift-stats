@@ -14,7 +14,7 @@ use rust_embed::Embed;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::{companion, db};
+use crate::{companion, db, service};
 use crate::import::{self, Paths};
 use crate::watch;
 
@@ -41,11 +41,14 @@ impl AppState {
         Ok(report)
     }
 
-    async fn sync(&self) -> Result<companion::SyncReport> {
+    /// `full` re-reads every activity; otherwise just the newest page.
+    async fn sync(&self, full: bool) -> Result<companion::SyncReport> {
         let result = async {
-            let fetched = companion::fetch(&self.paths.data_dir).await?;
+            let fetched = companion::fetch(&self.paths.data_dir, full).await?;
             let conn = self.conn.lock().unwrap();
-            companion::store(&conn, &fetched)
+            let report = companion::store(&conn, &fetched)?;
+            companion::fold_snapshots(&conn, &self.paths.data_dir)?;
+            Ok(report)
         }
         .await;
         *self.last_sync_error.lock().unwrap() = match &result {
@@ -119,14 +122,26 @@ pub fn start(conn: Connection, paths: Paths, initial_import: bool, watch: bool) 
         .route("/api/logout", post(logout))
         .with_state(state.clone());
 
-    // Companion data goes stale as friends start riding and events fill; refresh it while running
+    if companion::signed_in(&state.paths.data_dir) {
+        let data_dir = state.paths.data_dir.clone();
+        tokio::task::spawn_blocking(move || install_snapshot_agent(&data_dir));
+    }
+
+    // Companion data goes stale as friends start riding and events fill; refresh it while running.
+    // Only the first sync pages through every activity; later ones fetch the newest page.
     let st = state.clone();
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(30 * 60));
         loop {
             tick.tick().await;
             if companion::signed_in(&st.paths.data_dir) {
-                match st.sync().await {
+                let empty = st
+                    .conn
+                    .lock()
+                    .unwrap()
+                    .query_row("SELECT count(*) = 0 FROM zwift_activities", [], |r| r.get::<_, bool>(0))
+                    .unwrap_or(true);
+                match st.sync(empty).await {
                     Ok(r) => crate::print_sync(&r),
                     Err(e) => eprintln!("Zwift sync failed: {e:#}"),
                 }
@@ -134,6 +149,16 @@ pub fn start(conn: Connection, paths: Paths, initial_import: bool, watch: bool) 
         }
     });
     Ok(Running { router, state, _watcher: watcher })
+}
+
+/// When running from the app bundle, keep the background snapshot agent pointed at it so your
+/// totals are recorded while the app is closed.
+fn install_snapshot_agent(data_dir: &std::path::Path) {
+    if let Some(exe) = service::app_bundle_exe() {
+        if let Err(e) = service::install_snapshots(&exe, data_dir) {
+            eprintln!("couldn't install the snapshot agent: {e:#}");
+        }
+    }
 }
 
 pub async fn serve(conn: Connection, paths: Paths, port: u16, initial_import: bool, watch: bool) -> Result<()> {
@@ -242,7 +267,7 @@ async fn run_import(State(state): State<Shared>) -> Response {
 }
 
 async fn run_sync(State(state): State<Shared>) -> Response {
-    match state.sync().await {
+    match state.sync(false).await {
         Ok(r) => Json(json!({ "activities": r.activities, "followers": r.followers, "followees": r.followees, "events": r.events, "problems": r.problems }))
             .into_response(),
         Err(e) => error(format!("{e:#}")),
@@ -262,7 +287,9 @@ async fn login(State(state): State<Shared>, Json(req): Json<LoginRequest>) -> Re
         Err(e) => return error(format!("{e:#}")),
     };
     drop(req);
-    let sync = state.sync().await.err().map(|e| format!("{e:#}"));
+    let data_dir = state.paths.data_dir.clone();
+    tokio::task::spawn_blocking(move || install_snapshot_agent(&data_dir));
+    let sync = state.sync(true).await.err().map(|e| format!("{e:#}"));
     Json(json!({ "name": name, "sync_error": sync })).into_response()
 }
 
@@ -271,6 +298,9 @@ async fn logout(State(state): State<Shared>) -> Response {
     let cleared = state.conn.lock().unwrap().execute_batch(
         "DELETE FROM zwift_profile; DELETE FROM zwift_profile_history; DELETE FROM zwift_activities; DELETE FROM zwift_follows; DELETE FROM zwift_events;",
     );
+    if cfg!(target_os = "macos") {
+        let _ = service::uninstall_snapshots();
+    }
     match companion::sign_out(&state.paths.data_dir).and_then(|_| Ok(cleared?)) {
         Ok(_) => {
             state.imports.fetch_add(1, Ordering::Relaxed);

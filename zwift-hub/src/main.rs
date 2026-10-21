@@ -68,6 +68,15 @@ enum Command {
     Logout,
     /// Fetch Companion data from Zwift now (`serve` also does this every 30 minutes)
     Sync,
+    /// Record your XP and Drops totals if they changed (what the background agent runs). Doesn't
+    /// touch the database, so it works while the app is open
+    Snapshot,
+    /// The background agent that runs `snapshot` every few minutes, even when the app is closed
+    /// (macOS). The app installs it when you sign in
+    Snapshots {
+        #[command(subcommand)]
+        action: ServiceAction,
+    },
     /// Run a read-only SQL query against the database and print the result
     Sql { query: String },
 }
@@ -76,6 +85,7 @@ enum Command {
 enum ServiceAction {
     /// Install and start the background service
     Install {
+        /// Port for the explorer (`service` only)
         #[arg(long, default_value_t = 7878)]
         port: u16,
     },
@@ -148,7 +158,34 @@ async fn run(cli: Cli) -> Result<()> {
 
     match command {
         Command::Login => return companion::login(&data_dir).await,
-        Command::Logout => return companion::logout(&data_dir),
+        Command::Logout => {
+            if cfg!(target_os = "macos") {
+                service::uninstall_snapshots()?;
+            }
+            return companion::logout(&data_dir);
+        }
+        Command::Snapshot => {
+            if let Some(s) = companion::snapshot(&data_dir).await? {
+                println!("{} total XP {:?}, Drops {:?}, riding {}", s.fetched_at, s.total_xp, s.drops, s.riding);
+            }
+            return Ok(());
+        }
+        Command::Snapshots { action } => {
+            return match action {
+                ServiceAction::Install { .. } => {
+                    let exe = std::env::current_exe()?.canonicalize()?;
+                    service::install_snapshots(&exe, &data_dir)?;
+                    println!("Recording your totals every few minutes, even when the app is closed ({})", exe.display());
+                    Ok(())
+                }
+                ServiceAction::Uninstall => {
+                    let removed = service::uninstall_snapshots()?;
+                    println!("{}", if removed { "Removed the snapshot agent" } else { "The snapshot agent was not installed" });
+                    Ok(())
+                }
+                ServiceAction::Status => service::snapshots_status(),
+            };
+        }
         _ => {}
     }
 
@@ -197,10 +234,15 @@ async fn run(cli: Cli) -> Result<()> {
             tokio::signal::ctrl_c().await?;
         }
         Command::Sync => {
-            let fetched = companion::fetch(&data_dir).await?;
+            let fetched = companion::fetch(&data_dir, true).await?;
             print_sync(&companion::store(&conn, &fetched)?);
         }
-        Command::Service { .. } | Command::Login | Command::Logout | Command::App => unreachable!(),
+        Command::Service { .. }
+        | Command::Snapshots { .. }
+        | Command::Snapshot
+        | Command::Login
+        | Command::Logout
+        | Command::App => unreachable!(),
         Command::Sql { query } => {
             anyhow::ensure!(server::is_read_only(&query), "only a single read-only query is allowed");
             let res = db::query_json(&conn, query.trim().trim_end_matches(';'), 200)?;

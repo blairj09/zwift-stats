@@ -49,6 +49,7 @@ pub fn run(conn: &Connection, paths: &Paths) -> Result<ImportReport> {
     report.fit_total =
         conn.query_row("SELECT count(*) FROM fit_files WHERE start_utc IS NOT NULL", [], |r| r.get::<_, i64>(0))? as usize;
     link_unmatched_activities(conn)?;
+    crate::companion::fold_snapshots(conn, &paths.data_dir)?;
 
     if let Some(legacy) = &paths.legacy_db {
         if legacy.exists() {
