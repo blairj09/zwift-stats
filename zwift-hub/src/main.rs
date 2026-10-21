@@ -1,3 +1,4 @@
+mod companion;
 mod db;
 mod fit;
 mod import;
@@ -55,6 +56,13 @@ enum Command {
         #[command(subcommand)]
         action: ServiceAction,
     },
+    /// Sign in to Zwift for Companion data (profile, activities, followers, events). Saves a
+    /// refresh token, never your password
+    Login,
+    /// Forget the saved Zwift sign-in
+    Logout,
+    /// Fetch Companion data from Zwift now (`serve` also does this every 30 minutes)
+    Sync,
     /// Run a read-only SQL query against the database and print the result
     Sql { query: String },
 }
@@ -83,6 +91,13 @@ pub fn print_report(r: &import::ImportReport) {
     );
 }
 
+pub fn print_sync(r: &companion::SyncReport) {
+    println!(
+        "Synced from Zwift: profile, {} activities, {} followers, {} following, {} upcoming events",
+        r.activities, r.followers, r.followees, r.events
+    );
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -98,6 +113,12 @@ async fn main() -> Result<()> {
         data_dir: data_dir.clone(),
     };
     let db_path = cli.db.unwrap_or_else(|| data_dir.join("zwift.duckdb"));
+
+    match cli.command {
+        Command::Login => return companion::login(&data_dir).await,
+        Command::Logout => return companion::logout(&data_dir),
+        _ => {}
+    }
 
     if let Command::Service { action } = cli.command {
         return match action {
@@ -143,7 +164,11 @@ async fn main() -> Result<()> {
             })?;
             tokio::signal::ctrl_c().await?;
         }
-        Command::Service { .. } => unreachable!(),
+        Command::Sync => {
+            let fetched = companion::fetch(&data_dir).await?;
+            print_sync(&companion::store(&conn, &fetched)?);
+        }
+        Command::Service { .. } | Command::Login | Command::Logout => unreachable!(),
         Command::Sql { query } => {
             anyhow::ensure!(server::is_read_only(&query), "only a single read-only query is allowed");
             let res = db::query_json(&conn, query.trim().trim_end_matches(';'), 200)?;

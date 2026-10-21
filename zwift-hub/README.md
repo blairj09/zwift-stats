@@ -28,6 +28,17 @@ macOS protects `~/Documents`. If the log shows "Operation not permitted" for the
 
 DuckDB lets one process open the database at a time, so while the service runs, `zwift-hub import` and `zwift-hub sql` will report the file is in use. Use the explorer's Explore tab instead, or `service uninstall` first.
 
+## Companion data (optional)
+
+```bash
+./target/release/zwift-hub login     # asks for your Zwift email and password once
+./target/release/zwift-hub logout    # forgets the sign-in
+```
+
+Signing in adds a **Companion** tab: your profile (total XP, Drops balance, FTP, lifetime distance), who you follow that is riding right now, Ride Ons on your recent rides, and upcoming events. `serve` (and the background service) refreshes it every 30 minutes, or press **Sync now**; `zwift-hub sync` does the same when nothing else is running.
+
+`login` sends your password to Zwift's sign-in server once and saves only the refresh token it gets back, in `~/Library/Application Support/zwift-hub/zwift-token.json`, readable only by you. This is Zwift's unofficial API (the one the Companion app uses), so it is undocumented and can change or break without notice. The data lands in `zwift_profile`, `zwift_activities`, `zwift_follows` and `zwift_events`, each with a `raw` JSON column.
+
 ## Where the data comes from
 
 | Source | What it gives | How far back |
@@ -46,6 +57,7 @@ zwift-hub serve [--port 7878] [--open]     # import, start the explorer, and kee
 zwift-hub serve --no-import --no-watch     # start without importing or watching
 zwift-hub watch                            # keep importing, without the explorer
 zwift-hub service install|status|uninstall # run serve in the background at login (macOS)
+zwift-hub login | logout | sync            # Companion data from Zwift's API
 zwift-hub sql "SELECT route, sum(xp) FROM rides GROUP BY ALL ORDER BY 2 DESC"
 ```
 
@@ -57,6 +69,7 @@ Global options: `--db <file>` (default `~/Library/Application Support/zwift-hub/
 - **Rides**: every ride, sortable; click one for its details, including its XP breakdown
 - **Routes**: rates by route and by ride type, to see which rides pay best for XP or Drops
 - **Progress**: total XP, level and Drops balance over time, and cumulative earnings
+- **Companion**: profile, friends riding now, Ride Ons and upcoming events (after `zwift-hub login`)
 - **Explore**: read-only SQL against the database, with example queries and a quick chart of the result
 
 ## Tables
@@ -67,6 +80,7 @@ Global options: `--db <file>` (default `~/Library/Application Support/zwift-hub/
 - `fit_files`: session summary of every FIT file
 - `legacy_rides`: rows imported from the earlier tool
 - `log_files`: archived logs
+- `zwift_profile`, `zwift_activities`, `zwift_follows`, `zwift_events`: Companion data from Zwift's API
 
 ## Development
 

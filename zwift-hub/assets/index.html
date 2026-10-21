@@ -102,6 +102,9 @@
     .tile .sub { font-size: 0.8rem; color: var(--text-muted); margin-top: 2px; font-variant-numeric: tabular-nums; }
     .swatch { width: 8px; height: 8px; border-radius: 2px; display: inline-block; flex: none; }
 
+    ul.plain { list-style: none; margin: 0; padding: 0; }
+    ul.plain li { padding: 6px 0; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; gap: 12px; }
+    ul.plain li:last-child { border-bottom: 0; }
     .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
     @media (max-width: 800px) { .grid2 { grid-template-columns: 1fr; } }
     .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 16px; min-width: 0; }
@@ -144,6 +147,7 @@
       <button role="tab" data-tab="rides">Rides</button>
       <button role="tab" data-tab="routes">Routes</button>
       <button role="tab" data-tab="progress">Progress</button>
+      <button role="tab" data-tab="companion">Companion</button>
       <button role="tab" data-tab="explore">Explore</button>
     </nav>
     <div class="controls">
@@ -217,10 +221,35 @@
     <p class="note">Totals and level come from the game log, so they start with the oldest log in your archive. Cumulative charts include every ride with XP data.</p>
   </section>
 
+  <!-- Companion -->
+  <section data-panel="companion" class="stack" hidden>
+    <div class="card" id="signin" hidden>
+      <div class="card-head"><h2>Sign in to Zwift</h2></div>
+      <p>Run <code>zwift-hub login</code> in a terminal to see your profile, friends riding now, upcoming events and Ride Ons here. It asks for your Zwift email and password once and saves only a sign-in token on this Mac. This uses Zwift's unofficial API, the one the Companion app uses, so it can break without notice.</p>
+    </div>
+    <div class="tiles" id="profileTiles"></div>
+    <div class="grid2">
+      <div class="card">
+        <div class="card-head"><h2>Riding now</h2><span class="muted" id="followCounts"></span></div>
+        <ul class="plain" id="ridingNow"></ul>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Ride Ons on your recent rides</h2></div>
+        <div class="table-wrap"><table id="zwActivities"></table></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Upcoming events</h2>
+        <div class="controls"><input type="search" id="eventSearch" placeholder="Filter events" aria-label="Filter events">
+        <button class="btn" id="syncBtn">Sync now</button><span class="muted" id="syncInfo"></span></div></div>
+      <div class="table-wrap"><table id="zwEvents"></table></div>
+    </div>
+  </section>
+
   <!-- Explore -->
   <section data-panel="explore" class="stack" hidden>
     <div class="card stack">
-      <div class="card-head" style="margin:0"><h2>SQL</h2><span class="muted">DuckDB, read-only. Tables: rides, activities, xp_sources, fit_files, legacy_rides</span></div>
+      <div class="card-head" style="margin:0"><h2>SQL</h2><span class="muted">DuckDB, read-only. Tables: rides, activities, xp_sources, fit_files, legacy_rides, zwift_profile, zwift_activities, zwift_follows, zwift_events</span></div>
       <div class="examples" id="examples"></div>
       <textarea id="sqlInput" spellcheck="false" aria-label="SQL query"></textarea>
       <div class="controls"><button class="btn primary" id="runSql">Run</button><span class="muted">Ctrl/⌘ + Enter</span><span class="muted" id="sqlInfo"></span></div>
@@ -570,6 +599,7 @@ const EXAMPLES = [
   ['XP sources by month', `SELECT strftime(start_utc, '%Y-%m') AS month, source, sum(xp) AS xp\nFROM xp_sources\nGROUP BY ALL\nORDER BY month, xp DESC`],
   ['Rides by power', `SELECT start_utc, route, round(km, 1) AS km, avg_power, normalized_power,\n       round(xp_per_hour) AS xp_per_hour, round(drops_per_hour) AS drops_per_hour\nFROM rides\nWHERE avg_power IS NOT NULL\nORDER BY avg_power DESC\nLIMIT 50`],
   ['Monthly distance (all FIT files)', `SELECT strftime(start_utc, '%Y-%m') AS month, count(*) AS rides,\n       round(sum(distance_m) / 1000) AS km, round(sum(elapsed_s) / 3600, 1) AS hours\nFROM fit_files\nGROUP BY ALL\nORDER BY month`],
+  ['Ride Ons per ride (Zwift API)', `SELECT start_utc, name, round(distance_m / 1000, 1) AS km, ride_ons, comments\nFROM zwift_activities\nORDER BY start_utc DESC\nLIMIT 100`],
   ['Summarize rides', `SUMMARIZE rides`],
 ];
 
@@ -624,11 +654,53 @@ function renderAll() {
   document.querySelectorAll('#range button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.range === state.range)));
   document.querySelectorAll('#tabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === state.tab)));
   document.querySelectorAll('[data-panel]').forEach(p => { p.hidden = p.dataset.panel !== state.tab; });
-  document.getElementById('filters').hidden = state.tab === 'explore';
+  document.getElementById('filters').hidden = state.tab === 'explore' || state.tab === 'companion';
   if (state.tab === 'overview') { renderTiles(list); renderWeekly(list); renderTrend(list); renderSources(list); }
   if (state.tab === 'rides') { renderRideDetail(); renderRides(list); }
   if (state.tab === 'routes') renderRoutes(list);
   if (state.tab === 'progress') renderProgress(list);
+  if (state.tab === 'companion') renderCompanion();
+}
+
+// ---------- companion ----------
+const WORLDS = { 1: 'Watopia', 2: 'Richmond', 3: 'London', 4: 'New York', 5: 'Innsbruck', 6: 'Bologna', 7: 'Yorkshire',
+  8: 'Crit City', 9: 'Makuri Islands', 10: 'France', 11: 'Paris', 13: 'Scotland' };
+let companion = null;
+
+async function loadCompanion() {
+  companion = await fetch('/api/companion').then(x => x.json());
+}
+
+function renderCompanion() {
+  if (!companion) { loadCompanion().then(renderCompanion); return; }
+  const c = companion, p = c.profile[0];
+  document.getElementById('signin').hidden = c.signed_in;
+  document.getElementById('profileTiles').innerHTML = !p ? '' : [
+    ['Rider', esc(`${p.first_name ?? ''} ${p.last_name ?? ''}`), p.ftp ? `FTP ${fmt0(p.ftp)} W${p.weight_kg ? ` · ${fmt1(p.ftp / p.weight_kg)} W/kg` : ''}` : ''],
+    ['Total XP', fmt0(p.total_xp), `as of ${timeFmt.format(new Date(p.fetched_at))}`],
+    ['Drops', fmt0(p.drops), 'current balance'],
+    ['Lifetime', `${fmt0(p.total_km)} km`, `${fmt0(p.total_climb_m)} m climbed · ${fmt0(p.total_hours)} h`],
+  ].map(([label, value, sub]) => `<div class="tile"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`).join('');
+
+  const counts = Object.fromEntries(c.follows.map(f => [f.direction, f.n]));
+  document.getElementById('followCounts').textContent = p ? `${fmt0(counts.followee ?? 0)} following · ${fmt0(counts.follower ?? 0)} followers` : '';
+  document.getElementById('ridingNow').innerHTML = c.riding_now.length
+    ? c.riding_now.map(r => `<li><span>${esc(r.first_name)} ${esc(r.last_name)}</span><span class="muted">${esc(WORLDS[r.world_id] ?? '')}</span></li>`).join('')
+    : `<li class="muted">${c.signed_in ? 'Nobody you follow is riding at the last sync' : 'Not signed in'}</li>`;
+
+  document.getElementById('zwActivities').innerHTML = '<thead><tr><th class="left">Date</th><th class="left">Ride</th><th>km</th><th>Ride Ons</th></tr></thead><tbody>' +
+    c.activities.slice(0, 15).map(a => `<tr><td class="left">${a.start_utc ? shortDay.format(new Date(a.start_utc)) : ''}</td><td class="left name">${esc(a.name)}</td>
+      <td>${fmt1(a.distance_m / 1000)}</td><td>${fmt0(a.ride_ons)}</td></tr>`).join('') + '</tbody>';
+
+  const q = document.getElementById('eventSearch').value.toLowerCase();
+  const events = c.events.filter(e => !q || `${e.name} ${e.event_type} ${WORLDS[e.map_id] ?? ''}`.toLowerCase().includes(q)).slice(0, 100);
+  document.getElementById('zwEvents').innerHTML = '<thead><tr><th class="left">Starts</th><th class="left">Event</th><th class="left">Type</th><th class="left">World</th><th>Length</th></tr></thead><tbody>' +
+    (events.length ? events.map(e => {
+      const t = new Date(e.start_utc);
+      const len = e.distance_m ? `${fmt1(e.distance_m / 1000)} km` : e.duration_s ? fmtHours(e.duration_s) : e.laps ? `${e.laps} laps` : '';
+      return `<tr><td class="left">${shortDay.format(t)} ${timeFmt.format(t)}</td><td class="left name">${esc(e.name)}</td><td class="left">${esc((e.event_type ?? '').replace(/_/g, ' ').toLowerCase())}</td>
+        <td class="left">${esc(WORLDS[e.map_id] ?? '')}</td><td>${len}</td></tr>`;
+    }).join('') : `<tr><td colspan="5" class="left muted">${c.signed_in ? 'No upcoming events at the last sync' : 'Sign in to see events'}</td></tr>`) + '</tbody>';
 }
 
 function fillSelect(id, keys, value, onChange) {
@@ -652,7 +724,7 @@ setInterval(async () => {
   if (document.hidden) return;
   try {
     const st = await fetch('/api/status').then(x => x.json());
-    if (seenImports !== null && st.imports !== seenImports) await load();
+    if (seenImports !== null && st.imports !== seenImports) { companion = null; await load(); }
   } catch { /* server stopped; try again next tick */ }
 }, 20000);
 
@@ -678,6 +750,17 @@ document.getElementById('xpOnly').addEventListener('change', e => { state.xpOnly
 document.getElementById('importBtn').addEventListener('click', async e => {
   e.target.disabled = true; e.target.textContent = 'Importing…';
   try { await fetch('/api/import', { method: 'POST' }); await load(); } finally { e.target.disabled = false; e.target.textContent = 'Import now'; }
+});
+document.getElementById('eventSearch').addEventListener('input', renderCompanion);
+document.getElementById('syncBtn').addEventListener('click', async e => {
+  const info = document.getElementById('syncInfo');
+  e.target.disabled = true; info.textContent = 'Syncing…';
+  try {
+    const res = await fetch('/api/sync', { method: 'POST' });
+    const body = await res.json();
+    info.textContent = res.ok ? '' : body.error;
+    if (res.ok) { companion = null; await load(); }
+  } finally { e.target.disabled = false; }
 });
 document.getElementById('examples').innerHTML = EXAMPLES.map(([label], i) => `<button class="btn" data-i="${i}">${esc(label)}</button>`).join('');
 document.querySelectorAll('#examples button').forEach(b => b.addEventListener('click', () => { document.getElementById('sqlInput').value = EXAMPLES[b.dataset.i][1]; runSql(); }));

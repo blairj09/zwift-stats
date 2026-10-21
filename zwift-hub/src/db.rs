@@ -5,7 +5,7 @@ use duckdb::Connection;
 use duckdb::types::{TimeUnit, Value};
 use serde_json::{Map, Value as Json};
 
-const SCHEMA: &str = r#"
+pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS log_files (
     sha256        VARCHAR PRIMARY KEY,
     original_name VARCHAR,
@@ -79,6 +79,31 @@ CREATE TABLE IF NOT EXISTS legacy_rides (
     duration_s         DOUBLE,
     strava_activity_id BIGINT,
     ride_name          VARCHAR
+);
+
+-- From Zwift's API after `zwift-hub login`; `raw` keeps the full JSON for fields not broken out
+CREATE TABLE IF NOT EXISTS zwift_profile (
+    id BIGINT PRIMARY KEY, first_name VARCHAR, last_name VARCHAR, country VARCHAR, ftp DOUBLE,
+    weight_kg DOUBLE, height_cm DOUBLE, achievement_level BIGINT, total_xp BIGINT, drops BIGINT,
+    total_km DOUBLE, total_climb_m DOUBLE, total_hours DOUBLE, followers BIGINT, followees BIGINT,
+    fetched_at TIMESTAMP, raw VARCHAR
+);
+
+CREATE TABLE IF NOT EXISTS zwift_activities (
+    id VARCHAR PRIMARY KEY, name VARCHAR, start_utc TIMESTAMP, end_utc TIMESTAMP, distance_m DOUBLE,
+    elevation_m DOUBLE, avg_watts DOUBLE, calories DOUBLE, moving_s DOUBLE, sport VARCHAR,
+    world_id BIGINT, ride_ons BIGINT, comments BIGINT, privacy VARCHAR, raw VARCHAR
+);
+
+CREATE TABLE IF NOT EXISTS zwift_follows (
+    direction VARCHAR, profile_id BIGINT, first_name VARCHAR, last_name VARCHAR, country VARCHAR,
+    riding BOOLEAN, world_id BIGINT, status VARCHAR, raw VARCHAR,
+    PRIMARY KEY (direction, profile_id)
+);
+
+CREATE TABLE IF NOT EXISTS zwift_events (
+    id BIGINT PRIMARY KEY, name VARCHAR, start_utc TIMESTAMP, sport VARCHAR, event_type VARCHAR,
+    map_id BIGINT, route_id BIGINT, distance_m DOUBLE, duration_s DOUBLE, laps BIGINT, raw VARCHAR
 );
 "#;
 

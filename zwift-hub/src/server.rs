@@ -13,7 +13,7 @@ use rust_embed::Embed;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::db;
+use crate::{companion, db};
 use crate::import::{self, Paths};
 use crate::watch;
 
@@ -35,6 +35,14 @@ impl AppState {
         let report = import::run(&conn, &self.paths)?;
         self.imports.fetch_add(1, Ordering::Relaxed);
         *self.last_import.lock().unwrap() = Some(chrono::Utc::now().to_rfc3339());
+        Ok(report)
+    }
+
+    async fn sync(&self) -> Result<companion::SyncReport> {
+        let fetched = companion::fetch(&self.paths.data_dir).await?;
+        let conn = self.conn.lock().unwrap();
+        let report = companion::store(&conn, &fetched)?;
+        self.imports.fetch_add(1, Ordering::Relaxed);
         Ok(report)
     }
 }
@@ -70,7 +78,24 @@ pub async fn serve(conn: Connection, paths: Paths, port: u16, initial_import: bo
         .route("/api/status", get(status))
         .route("/api/import", post(run_import))
         .route("/api/sql", post(sql))
-        .with_state(state);
+        .route("/api/companion", get(companion_data))
+        .route("/api/sync", post(run_sync))
+        .with_state(state.clone());
+
+    // Companion data goes stale as friends start riding and events fill; refresh it while serving
+    let st = state.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(30 * 60));
+        loop {
+            tick.tick().await;
+            if companion::signed_in(&st.paths.data_dir) {
+                match st.sync().await {
+                    Ok(r) => crate::print_sync(&r),
+                    Err(e) => eprintln!("Zwift sync failed: {e:#}"),
+                }
+            }
+        }
+    });
 
     // Loopback only: the database is personal and the SQL endpoint is unauthenticated
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
@@ -148,6 +173,38 @@ async fn run_import(State(state): State<Shared>) -> Response {
             "legacy_rides": r.legacy_rides,
         }))
         .into_response(),
+        Err(e) => error(e),
+    }
+}
+
+async fn run_sync(State(state): State<Shared>) -> Response {
+    match state.sync().await {
+        Ok(r) => Json(json!({ "activities": r.activities, "followers": r.followers, "followees": r.followees, "events": r.events }))
+            .into_response(),
+        Err(e) => error(format!("{e:#}")),
+    }
+}
+
+/// Everything the Companion tab shows, in one response
+async fn companion_data(State(state): State<Shared>) -> Response {
+    let conn = state.conn.lock().unwrap();
+    let q = |sql: &str| db::query_objects(&conn, sql);
+    let recent = (chrono::Utc::now() - chrono::Duration::hours(1)).format("%Y-%m-%d %H:%M:%S");
+    let result = (|| -> Result<Value> {
+        Ok(json!({
+            "signed_in": companion::signed_in(&state.paths.data_dir),
+            "profile": q("SELECT * EXCLUDE (raw) FROM zwift_profile")?,
+            "riding_now": q("SELECT first_name, last_name, country, world_id FROM zwift_follows
+                             WHERE direction = 'followee' AND riding ORDER BY first_name")?,
+            "follows": q("SELECT direction, count(*) AS n FROM zwift_follows GROUP BY ALL")?,
+            "events": q(&format!("SELECT id, name, start_utc, sport, event_type, map_id, distance_m, duration_s, laps
+                         FROM zwift_events WHERE start_utc >= TIMESTAMP '{recent}' ORDER BY start_utc LIMIT 300"))?,
+            "activities": q("SELECT id, name, start_utc, distance_m, elevation_m, avg_watts, moving_s, ride_ons, comments
+                             FROM zwift_activities ORDER BY start_utc DESC LIMIT 100")?,
+        }))
+    })();
+    match result {
+        Ok(v) => Json(v).into_response(),
         Err(e) => error(e),
     }
 }
