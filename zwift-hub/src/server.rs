@@ -34,6 +34,11 @@ struct AppState {
 
 impl AppState {
     fn import(&self) -> Result<import::ImportReport> {
+        // The first read of ~/Documents waits for macOS to ask for permission; do it before taking
+        // the database, so the window can show what's already imported in the meantime
+        for dir in ["Logs", "Activities"] {
+            let _ = std::fs::read_dir(self.paths.zwift_dir.join(dir));
+        }
         let conn = self.conn.lock().unwrap();
         let report = import::run(&conn, &self.paths)?;
         self.imports.fetch_add(1, Ordering::Relaxed);
