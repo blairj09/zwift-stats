@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+mod app;
 mod companion;
 mod db;
 mod fit;
@@ -26,12 +28,15 @@ struct Cli {
     /// Database from the earlier zwift-stats tool, imported for rides whose logs are gone
     #[arg(long, global = true)]
     legacy_db: Option<PathBuf>,
+    /// With no command, opens the Mac app (or starts `serve` elsewhere)
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
 enum Command {
+    /// Open Zwift Hub in its own window (macOS). This is what the app bundle runs
+    App,
     /// Archive new game logs and import logs, FIT files and legacy rides
     Import,
     /// Import, then start the explorer at http://127.0.0.1:<port> and keep importing as Zwift
@@ -98,29 +103,53 @@ pub fn print_sync(r: &companion::SyncReport) {
     );
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let cli = Cli::parse();
+    // The Mac app's window must own the main thread, so it starts before any async runtime
+    let opens_app = matches!(cli.command, Some(Command::App)) || (cli.command.is_none() && cfg!(target_os = "macos"));
+    if opens_app {
+        let (db_path, paths) = locations(&cli)?;
+        #[cfg(target_os = "macos")]
+        return app::run(&db_path, paths);
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (db_path, paths);
+            anyhow::bail!("the app window is only available on macOS; run `zwift-hub serve` instead");
+        }
+    }
+    tokio::runtime::Builder::new_multi_thread().enable_all().build()?.block_on(run(cli))
+}
+
+fn locations(cli: &Cli) -> Result<(PathBuf, Paths)> {
     let data_dir = data_dir();
     let paths = Paths {
         zwift_dir: cli
             .zwift_dir
+            .clone()
             .or_else(|| dirs::document_dir().map(|d| d.join("Zwift")))
             .context("could not find the Zwift documents folder; pass --zwift-dir")?,
         legacy_db: cli
             .legacy_db
+            .clone()
             .or_else(|| dirs::home_dir().map(|h| h.join(".local/share/zwift-stats/bests.db"))),
         data_dir: data_dir.clone(),
     };
-    let db_path = cli.db.unwrap_or_else(|| data_dir.join("zwift.duckdb"));
+    let db_path = cli.db.clone().unwrap_or_else(|| data_dir.join("zwift.duckdb"));
+    Ok((db_path, paths))
+}
 
-    match cli.command {
+async fn run(cli: Cli) -> Result<()> {
+    let (db_path, paths) = locations(&cli)?;
+    let data_dir = paths.data_dir.clone();
+    let command = cli.command.unwrap_or(Command::Serve { port: 7878, no_import: false, no_watch: false, open: true });
+
+    match command {
         Command::Login => return companion::login(&data_dir).await,
         Command::Logout => return companion::logout(&data_dir),
         _ => {}
     }
 
-    if let Command::Service { action } = cli.command {
+    if let Command::Service { action } = command {
         return match action {
             ServiceAction::Install { port } => {
                 let mut args = vec!["serve".to_string(), "--port".into(), port.to_string()];
@@ -144,7 +173,7 @@ async fn main() -> Result<()> {
         )
     })?;
 
-    match cli.command {
+    match command {
         Command::Import => print_report(&import::run(&conn, &paths)?),
         Command::Serve { port, no_import, no_watch, open } => {
             if open {
@@ -168,7 +197,7 @@ async fn main() -> Result<()> {
             let fetched = companion::fetch(&data_dir).await?;
             print_sync(&companion::store(&conn, &fetched)?);
         }
-        Command::Service { .. } | Command::Login | Command::Logout => unreachable!(),
+        Command::Service { .. } | Command::Login | Command::Logout | Command::App => unreachable!(),
         Command::Sql { query } => {
             anyhow::ensure!(server::is_read_only(&query), "only a single read-only query is allowed");
             let res = db::query_json(&conn, query.trim().trim_end_matches(';'), 200)?;

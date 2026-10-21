@@ -4,15 +4,24 @@ A single Rust binary that imports everything Zwift leaves on your Mac into a loc
 
 Nothing leaves your machine. The server listens on `127.0.0.1` only.
 
-## Quick start
+## Quick start (Mac app)
 
 ```bash
 cd zwift-hub
-cargo build --release          # first build compiles DuckDB, which takes a few minutes
+./macos/build-app.sh          # builds "Zwift Hub.app" into ~/Applications; the first build compiles DuckDB
+open ~/Applications/"Zwift Hub.app"
+```
+
+Zwift Hub opens in its own window with a Dock icon. On launch it imports your logs and rides, then keeps watching your Zwift folders while it's open: new rides and log lines are imported automatically (within about 15 seconds of Zwift going quiet, and every few minutes during a ride) and the window refreshes itself. The first launch may ask to access your Documents folder; allow it so it can read `Documents/Zwift`. The app opens no network port: its window talks to the database directly.
+
+## In a browser instead
+
+```bash
+cargo build --release
 ./target/release/zwift-hub serve --open
 ```
 
-`serve` imports first, opens http://127.0.0.1:7878, and then watches your Zwift folders: new rides and log lines are imported automatically (within about 15 seconds of Zwift going quiet, and every few minutes during a ride), and an open explorer page refreshes itself.
+`serve` does the same, at http://127.0.0.1:7878. It answers only pages it served itself, so other websites can't read or change your data through it.
 
 ## Run it in the background
 
@@ -31,13 +40,13 @@ DuckDB lets one process open the database at a time, so while the service runs, 
 ## Companion data (optional)
 
 ```bash
-./target/release/zwift-hub login     # asks for your Zwift email and password once
-./target/release/zwift-hub logout    # forgets the sign-in
+./target/release/zwift-hub login     # or sign in from the Companion tab
+./target/release/zwift-hub logout    # or Sign out on the Companion tab
 ```
 
-Signing in adds a **Companion** tab: your profile (total XP, Drops balance, FTP, lifetime distance), who you follow that is riding right now, Ride Ons on your recent rides, and upcoming events. `serve` (and the background service) refreshes it every 30 minutes, or press **Sync now**; `zwift-hub sync` does the same when nothing else is running.
+Sign in on the **Companion** tab (or with `login`) to see: your profile (total XP, Drops balance, FTP, lifetime distance), who you follow that is riding right now, Ride Ons on your recent rides, and upcoming events. The app (and `serve`) refreshes it every 30 minutes, or press **Sync now**; `zwift-hub sync` does the same when nothing else is running.
 
-`login` sends your password to Zwift's sign-in server once and saves only the refresh token it gets back, in `~/Library/Application Support/zwift-hub/zwift-token.json`, readable only by you. This is Zwift's unofficial API (the one the Companion app uses), so it is undocumented and can change or break without notice. The data lands in `zwift_profile`, `zwift_activities`, `zwift_follows` and `zwift_events`, each with a `raw` JSON column.
+Signing in sends your password to Zwift's sign-in server once and saves only the refresh token it gets back, in `~/Library/Application Support/zwift-hub/zwift-token.json`, readable only by you. This is Zwift's unofficial API (the one the Companion app uses), so it is undocumented and can change or break without notice. The data lands in `zwift_profile`, `zwift_activities`, `zwift_follows` and `zwift_events`, each with a `raw` JSON column.
 
 ## Where the data comes from
 

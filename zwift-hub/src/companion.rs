@@ -98,44 +98,55 @@ async fn request_token(client: &reqwest::Client, form: &[(&str, &str)]) -> Resul
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no token endpoint answered")))
 }
 
-/// Prompts for email and password on the terminal and saves a refresh token.
+/// Exchanges email and password for a refresh token, saves only the token, and returns the
+/// signed-in rider's name.
+pub async fn sign_in(data_dir: &Path, email: &str, password: &str) -> Result<String> {
+    let client = client()?;
+    let token = request_token(
+        &client,
+        &[("client_id", CLIENT_ID), ("grant_type", "password"), ("username", email.trim()), ("password", password)],
+    )
+    .await?;
+    let refresh = token.refresh_token.context("Zwift returned no refresh token")?;
+    save_token(data_dir, &refresh)?;
+    let me = get(&client, &token.access_token, "/api/profiles/me").await?;
+    Ok(format!(
+        "{} {}",
+        str_at(&me, "firstName").unwrap_or_default(),
+        str_at(&me, "lastName").unwrap_or_default()
+    )
+    .trim()
+    .to_string())
+}
+
+/// Prompts for email and password on the terminal; the explorer's Companion tab does the same.
 pub async fn login(data_dir: &Path) -> Result<()> {
     print!("Zwift email: ");
     std::io::stdout().flush()?;
     let mut email = String::new();
     std::io::stdin().read_line(&mut email)?;
     let password = rpassword::prompt_password("Zwift password (not saved): ")?;
-
-    let client = client()?;
-    let token = request_token(
-        &client,
-        &[
-            ("client_id", CLIENT_ID),
-            ("grant_type", "password"),
-            ("username", email.trim()),
-            ("password", &password),
-        ],
-    )
-    .await?;
-    drop(password);
-    let refresh = token.refresh_token.context("Zwift returned no refresh token")?;
-    save_token(data_dir, &refresh)?;
-
-    let me = get(&client, &token.access_token, "/api/profiles/me").await?;
+    let name = sign_in(data_dir, &email, &password).await?;
     println!(
-        "Signed in as {} {}. Saved a refresh token to {} (your password was not saved).",
-        str_at(&me, "firstName").unwrap_or_default(),
-        str_at(&me, "lastName").unwrap_or_default(),
+        "Signed in as {name}. Saved a refresh token to {} (your password was not saved).",
         token_path(data_dir).display()
     );
     Ok(())
 }
 
-pub fn logout(data_dir: &Path) -> Result<()> {
+/// Removes the saved sign-in; returns whether there was one.
+pub fn sign_out(data_dir: &Path) -> Result<bool> {
     let path = token_path(data_dir);
-    if path.exists() {
+    let existed = path.exists();
+    if existed {
         fs::remove_file(&path)?;
-        println!("Signed out; removed {}", path.display());
+    }
+    Ok(existed)
+}
+
+pub fn logout(data_dir: &Path) -> Result<()> {
+    if sign_out(data_dir)? {
+        println!("Signed out; removed {}", token_path(data_dir).display());
     } else {
         println!("Not signed in");
     }

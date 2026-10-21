@@ -4,8 +4,9 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use axum::Router;
-use axum::extract::{Path, State};
-use axum::http::{StatusCode, header};
+use axum::extract::{Path, Request, State};
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use duckdb::Connection;
@@ -51,7 +52,30 @@ type Shared = Arc<AppState>;
 
 const SQL_ROW_LIMIT: usize = 5000;
 
-pub async fn serve(conn: Connection, paths: Paths, port: u16, initial_import: bool, watch: bool) -> Result<()> {
+/// Keeps the folder watcher alive for as long as the app runs.
+pub struct Running {
+    pub router: Router,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    state: Shared,
+    _watcher: Option<notify::RecommendedWatcher>,
+}
+
+impl Running {
+    /// Imports on a worker thread; open pages reload when it finishes.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn import_in_background(&self) {
+        let st = self.state.clone();
+        tokio::task::spawn_blocking(move || match st.import() {
+            Ok(r) => crate::print_report(&r),
+            Err(e) => eprintln!("import failed: {e:#}"),
+        });
+    }
+}
+
+/// Imports, starts the watcher and the Companion refresh, and returns the routes. Shared by the
+/// web server and the Mac app, which answers the same routes without opening a port. Must be
+/// called inside a Tokio runtime.
+pub fn start(conn: Connection, paths: Paths, initial_import: bool, watch: bool) -> Result<Running> {
     let state = Arc::new(AppState {
         conn: Mutex::new(conn),
         paths,
@@ -61,7 +85,7 @@ pub async fn serve(conn: Connection, paths: Paths, port: u16, initial_import: bo
     if initial_import {
         crate::print_report(&state.import()?);
     }
-    let _watcher = if watch {
+    let watcher = if watch {
         let st = state.clone();
         Some(watch::spawn(&state.paths, move || match st.import() {
             Ok(r) => crate::print_report(&r),
@@ -70,7 +94,7 @@ pub async fn serve(conn: Connection, paths: Paths, port: u16, initial_import: bo
     } else {
         None
     };
-    let app = Router::new()
+    let router = Router::new()
         .route("/", get(|| asset("index.html")))
         .route("/assets/{*file}", get(|Path(file): Path<String>| asset_owned(file)))
         .route("/api/rides", get(rides))
@@ -80,9 +104,11 @@ pub async fn serve(conn: Connection, paths: Paths, port: u16, initial_import: bo
         .route("/api/sql", post(sql))
         .route("/api/companion", get(companion_data))
         .route("/api/sync", post(run_sync))
+        .route("/api/login", post(login))
+        .route("/api/logout", post(logout))
         .with_state(state.clone());
 
-    // Companion data goes stale as friends start riding and events fill; refresh it while serving
+    // Companion data goes stale as friends start riding and events fill; refresh it while running
     let st = state.clone();
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(30 * 60));
@@ -96,6 +122,12 @@ pub async fn serve(conn: Connection, paths: Paths, port: u16, initial_import: bo
             }
         }
     });
+    Ok(Running { router, state, _watcher: watcher })
+}
+
+pub async fn serve(conn: Connection, paths: Paths, port: u16, initial_import: bool, watch: bool) -> Result<()> {
+    let running = start(conn, paths, initial_import, watch)?;
+    let app = running.router.clone().layer(middleware::from_fn(local_only));
 
     // Loopback only: the database is personal and the SQL endpoint is unauthenticated
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
@@ -103,6 +135,27 @@ pub async fn serve(conn: Connection, paths: Paths, port: u16, initial_import: bo
     println!("Zwift Hub running at http://{addr}");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+fn is_local(value: &str) -> bool {
+    let host = value.split("://").last().unwrap_or_default();
+    let host = host.split(['/', ':']).next().unwrap_or_default();
+    matches!(host, "127.0.0.1" | "localhost")
+}
+
+/// The server has no authentication, so it only answers pages it served itself: a web page
+/// elsewhere can't post to it, and a site that points its own domain at 127.0.0.1 (DNS
+/// rebinding) still sends its own name in Host and is refused.
+async fn local_only(headers: HeaderMap, req: Request, next: Next) -> Response {
+    let header_ok = |name: header::HeaderName, required: bool| match headers.get(name).and_then(|v| v.to_str().ok()) {
+        Some(v) => is_local(v),
+        None => !required,
+    };
+    if header_ok(header::HOST, true) && header_ok(header::ORIGIN, false) {
+        next.run(req).await
+    } else {
+        (StatusCode::FORBIDDEN, "Zwift Hub only answers pages it served").into_response()
+    }
 }
 
 async fn asset(path: &'static str) -> Response {
@@ -182,6 +235,37 @@ async fn run_sync(State(state): State<Shared>) -> Response {
         Ok(r) => Json(json!({ "activities": r.activities, "followers": r.followers, "followees": r.followees, "events": r.events }))
             .into_response(),
         Err(e) => error(format!("{e:#}")),
+    }
+}
+
+#[derive(Deserialize)]
+struct LoginRequest {
+    email: String,
+    password: String,
+}
+
+/// Signs in from the Companion tab; the password is used for this one request and never stored
+async fn login(State(state): State<Shared>, Json(req): Json<LoginRequest>) -> Response {
+    let name = match companion::sign_in(&state.paths.data_dir, &req.email, &req.password).await {
+        Ok(name) => name,
+        Err(e) => return error(format!("{e:#}")),
+    };
+    drop(req);
+    let sync = state.sync().await.err().map(|e| format!("{e:#}"));
+    Json(json!({ "name": name, "sync_error": sync })).into_response()
+}
+
+async fn logout(State(state): State<Shared>) -> Response {
+    // Signing out also forgets what was fetched with that sign-in
+    let cleared = state.conn.lock().unwrap().execute_batch(
+        "DELETE FROM zwift_profile; DELETE FROM zwift_activities; DELETE FROM zwift_follows; DELETE FROM zwift_events;",
+    );
+    match companion::sign_out(&state.paths.data_dir).and_then(|_| Ok(cleared?)) {
+        Ok(_) => {
+            state.imports.fetch_add(1, Ordering::Relaxed);
+            Json(json!({ "signed_out": true })).into_response()
+        }
+        Err(e) => error(e),
     }
 }
 

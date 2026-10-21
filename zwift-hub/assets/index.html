@@ -86,13 +86,15 @@
     .seg button { border: 0; background: transparent; color: var(--text-secondary); padding: 6px 12px; font: inherit; cursor: pointer; }
     .seg button + button { border-left: 1px solid var(--border); }
     .seg button[aria-pressed="true"] { background: var(--accent-bg); color: var(--text-primary); font-weight: 600; }
-    input[type="search"], select, textarea, button.btn {
+    input[type="search"], input[type="email"], input[type="password"], select, textarea, button.btn {
       font: inherit; color: var(--text-primary); background: var(--surface-1);
       border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px;
     }
     button.btn { cursor: pointer; }
     button.btn.primary { background: var(--xp); color: #fff; border-color: transparent; }
     input[type="search"] { flex: 1 1 200px; max-width: 320px; }
+    #signinForm { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+    #signinForm input { flex: 1 1 200px; max-width: 280px; }
 
     .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
     @media (max-width: 800px) { .tiles { grid-template-columns: repeat(2, 1fr); } }
@@ -225,8 +227,15 @@
   <section data-panel="companion" class="stack" hidden>
     <div class="card" id="signin" hidden>
       <div class="card-head"><h2>Sign in to Zwift</h2></div>
-      <p>Run <code>zwift-hub login</code> in a terminal to see your profile, friends riding now, upcoming events and Ride Ons here. It asks for your Zwift email and password once and saves only a sign-in token on this Mac. This uses Zwift's unofficial API, the one the Companion app uses, so it can break without notice.</p>
+      <p class="muted">See your profile, friends riding now, upcoming events and Ride Ons here. Your password goes to Zwift once to get a sign-in token; only the token is saved, on this Mac. This uses Zwift's unofficial API, the one the Companion app uses, so it can break without notice.</p>
+      <form id="signinForm">
+        <input type="email" id="zwEmail" placeholder="Zwift email" autocomplete="username" required aria-label="Zwift email">
+        <input type="password" id="zwPassword" placeholder="Password" autocomplete="current-password" required aria-label="Zwift password">
+        <button class="btn primary" type="submit" id="signinBtn">Sign in</button>
+      </form>
+      <div class="error" id="signinError"></div>
     </div>
+    <div class="controls" id="signedInAs" hidden><span class="muted" id="signedInName"></span><button class="btn" id="signoutBtn">Sign out</button></div>
     <div class="tiles" id="profileTiles"></div>
     <div class="grid2">
       <div class="card">
@@ -675,6 +684,8 @@ function renderCompanion() {
   if (!companion) { loadCompanion().then(renderCompanion); return; }
   const c = companion, p = c.profile[0];
   document.getElementById('signin').hidden = c.signed_in;
+  document.getElementById('signedInAs').hidden = !c.signed_in;
+  document.getElementById('signedInName').textContent = p ? `Signed in to Zwift as ${p.first_name ?? ''} ${p.last_name ?? ''}` : 'Signed in to Zwift';
   document.getElementById('profileTiles').innerHTML = !p ? '' : [
     ['Rider', esc(`${p.first_name ?? ''} ${p.last_name ?? ''}`), p.ftp ? `FTP ${fmt0(p.ftp)} W${p.weight_kg ? ` · ${fmt1(p.ftp / p.weight_kg)} W/kg` : ''}` : ''],
     ['Total XP', fmt0(p.total_xp), `as of ${timeFmt.format(new Date(p.fetched_at))}`],
@@ -752,6 +763,26 @@ document.getElementById('importBtn').addEventListener('click', async e => {
   try { await fetch('/api/import', { method: 'POST' }); await load(); } finally { e.target.disabled = false; e.target.textContent = 'Import now'; }
 });
 document.getElementById('eventSearch').addEventListener('input', renderCompanion);
+document.getElementById('signinForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const btn = document.getElementById('signinBtn'), err = document.getElementById('signinError');
+  const pw = document.getElementById('zwPassword');
+  btn.disabled = true; btn.textContent = 'Signing in…'; err.textContent = '';
+  try {
+    const res = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: document.getElementById('zwEmail').value, password: pw.value }) });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error);
+    pw.value = '';
+    if (body.sync_error) err.textContent = `Signed in, but the first sync failed: ${body.sync_error}`;
+    companion = null; await load();
+  } catch (x) { err.textContent = x.message; }
+  finally { btn.disabled = false; btn.textContent = 'Sign in'; }
+});
+document.getElementById('signoutBtn').addEventListener('click', async () => {
+  await fetch('/api/logout', { method: 'POST' });
+  companion = null; await load();
+});
 document.getElementById('syncBtn').addEventListener('click', async e => {
   const info = document.getElementById('syncInfo');
   e.target.disabled = true; info.textContent = 'Syncing…';
