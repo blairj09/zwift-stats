@@ -148,7 +148,7 @@
     </nav>
     <div class="controls">
       <span class="muted" id="statusLine"></span>
-      <button class="btn" id="importBtn">Re-import</button>
+      <button class="btn" id="importBtn">Import now</button>
     </div>
   </header>
 
@@ -639,12 +639,28 @@ function fillSelect(id, keys, value, onChange) {
   return el.value;
 }
 
+let seenImports = null;
+function showStatus(st) {
+  seenImports = st.imports;
+  const updated = st.last_import ? ` · updated ${new Date(st.last_import).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : '';
+  document.getElementById('statusLine').textContent =
+    `${fmt0(st.rides_with_xp)} rides with XP · ${fmt0(st.rides)} total${updated}`;
+}
+
+// The server re-imports when Zwift writes new logs or rides; reload when it has
+setInterval(async () => {
+  if (document.hidden) return;
+  try {
+    const st = await fetch('/api/status').then(x => x.json());
+    if (seenImports !== null && st.imports !== seenImports) await load();
+  } catch { /* server stopped; try again next tick */ }
+}, 20000);
+
 async function load() {
   const [r, s, st] = await Promise.all(['/api/rides', '/api/xp_sources', '/api/status'].map(u => fetch(u).then(x => x.json())));
   rides = r.map(x => ({ ...x, t: new Date(x.start_utc) }));
   sources = s;
-  document.getElementById('statusLine').textContent =
-    `${fmt0(st.rides_with_xp)} rides with XP · ${fmt0(st.rides)} total · ${fmt0(st.archived_logs)} logs archived`;
+  showStatus(st);
   const kinds = [...new Set(rides.map(x => x.kind || 'Unknown'))].sort();
   const kindSel = document.getElementById('kind');
   kindSel.innerHTML = '<option value="">All ride types</option>' + kinds.map(k => `<option>${esc(k)}</option>`).join('');
@@ -661,7 +677,7 @@ document.getElementById('search').addEventListener('input', e => { state.search 
 document.getElementById('xpOnly').addEventListener('change', e => { state.xpOnly = e.target.checked; renderAll(); });
 document.getElementById('importBtn').addEventListener('click', async e => {
   e.target.disabled = true; e.target.textContent = 'Importing…';
-  try { await fetch('/api/import', { method: 'POST' }); await load(); } finally { e.target.disabled = false; e.target.textContent = 'Re-import'; }
+  try { await fetch('/api/import', { method: 'POST' }); await load(); } finally { e.target.disabled = false; e.target.textContent = 'Import now'; }
 });
 document.getElementById('examples').innerHTML = EXAMPLES.map(([label], i) => `<button class="btn" data-i="${i}">${esc(label)}</button>`).join('');
 document.querySelectorAll('#examples button').forEach(b => b.addEventListener('click', () => { document.getElementById('sqlInput').value = EXAMPLES[b.dataset.i][1]; runSql(); }));

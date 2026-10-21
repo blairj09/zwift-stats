@@ -3,6 +3,8 @@ mod fit;
 mod import;
 mod logparse;
 mod server;
+mod service;
+mod watch;
 
 use std::path::PathBuf;
 
@@ -31,26 +33,50 @@ struct Cli {
 enum Command {
     /// Archive new game logs and import logs, FIT files and legacy rides
     Import,
-    /// Import, then start the explorer at http://127.0.0.1:<port>
+    /// Import, then start the explorer at http://127.0.0.1:<port> and keep importing as Zwift
+    /// writes new logs and rides
     Serve {
         #[arg(long, default_value_t = 7878)]
         port: u16,
         /// Skip the import on start
         #[arg(long)]
         no_import: bool,
+        /// Don't watch the Zwift folders for new logs and rides
+        #[arg(long)]
+        no_watch: bool,
         /// Open the explorer in the default browser
         #[arg(long)]
         open: bool,
     },
+    /// Import, then keep importing as Zwift writes new logs and rides, without the explorer
+    Watch,
+    /// Run the explorer and watcher in the background at login (macOS)
+    Service {
+        #[command(subcommand)]
+        action: ServiceAction,
+    },
     /// Run a read-only SQL query against the database and print the result
     Sql { query: String },
+}
+
+#[derive(Subcommand)]
+enum ServiceAction {
+    /// Install and start the background service
+    Install {
+        #[arg(long, default_value_t = 7878)]
+        port: u16,
+    },
+    /// Stop and remove the background service
+    Uninstall,
+    /// Show whether the background service is running
+    Status,
 }
 
 fn data_dir() -> PathBuf {
     dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("zwift-hub")
 }
 
-fn print_report(r: &import::ImportReport) {
+pub fn print_report(r: &import::ImportReport) {
     println!(
         "Imported: {} new log(s) archived ({} total), {} activities with XP, {} new FIT file(s) ({} total, {} unreadable), {} legacy ride(s)",
         r.logs_archived, r.logs_total, r.activities, r.fit_new, r.fit_total, r.fit_failed, r.legacy_rides
@@ -72,21 +98,52 @@ async fn main() -> Result<()> {
         data_dir: data_dir.clone(),
     };
     let db_path = cli.db.unwrap_or_else(|| data_dir.join("zwift.duckdb"));
-    let conn = db::open(&db_path).with_context(|| format!("opening {}", db_path.display()))?;
+
+    if let Command::Service { action } = cli.command {
+        return match action {
+            ServiceAction::Install { port } => {
+                let mut args = vec!["serve".to_string(), "--port".into(), port.to_string()];
+                args.extend(["--zwift-dir".into(), paths.zwift_dir.display().to_string()]);
+                args.extend(["--db".into(), db_path.display().to_string()]);
+                if let Some(legacy) = &paths.legacy_db {
+                    args.extend(["--legacy-db".into(), legacy.display().to_string()]);
+                }
+                service::install(args, &data_dir)
+            }
+            ServiceAction::Uninstall => service::uninstall(),
+            ServiceAction::Status => service::status(),
+        };
+    }
+
+    // DuckDB allows one process per database file, so a running `serve` holds it
+    let conn = db::open(&db_path).with_context(|| {
+        format!(
+            "opening {} (if Zwift Hub is already running, use its Explore tab at http://127.0.0.1:7878)",
+            db_path.display()
+        )
+    })?;
 
     match cli.command {
         Command::Import => print_report(&import::run(&conn, &paths)?),
-        Command::Serve { port, no_import, open } => {
-            if !no_import {
-                print_report(&import::run(&conn, &paths)?);
-            }
+        Command::Serve { port, no_import, no_watch, open } => {
             if open {
                 let url = format!("http://127.0.0.1:{port}");
                 let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
                 let _ = std::process::Command::new(opener).arg(&url).spawn();
             }
-            server::serve(conn, paths, port).await?;
+            server::serve(conn, paths, port, !no_import, !no_watch).await?;
         }
+        Command::Watch => {
+            print_report(&import::run(&conn, &paths)?);
+            let conn = std::sync::Mutex::new(conn);
+            let p = paths.clone();
+            let _watcher = watch::spawn(&paths, move || match import::run(&conn.lock().unwrap(), &p) {
+                Ok(r) => print_report(&r),
+                Err(e) => eprintln!("import failed: {e:#}"),
+            })?;
+            tokio::signal::ctrl_c().await?;
+        }
+        Command::Service { .. } => unreachable!(),
         Command::Sql { query } => {
             anyhow::ensure!(server::is_read_only(&query), "only a single read-only query is allowed");
             let res = db::query_json(&conn, query.trim().trim_end_matches(';'), 200)?;

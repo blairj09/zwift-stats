@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use crate::fit;
 use crate::logparse::{self, LogActivity};
 
+#[derive(Clone)]
 pub struct Paths {
     pub zwift_dir: PathBuf,
     pub data_dir: PathBuf,
@@ -57,9 +58,23 @@ pub fn run(conn: &Connection, paths: &Paths) -> Result<ImportReport> {
     Ok(report)
 }
 
-/// Copies each game log into the archive, named by its hash. Zwift keeps only its last ten
+/// Zwift writes one log per game session and starts each with a `Log Time:` header line, so
+/// the header identifies the session. Hashing it (rather than the whole file) means the live
+/// Log.txt, which grows all ride long, keeps a single archived copy that is replaced as it grows.
+fn session_key(bytes: &[u8]) -> String {
+    let head = &bytes[..bytes.len().min(200)];
+    let first_line = head.split(|&b| b == b'\n').next().unwrap_or_default();
+    if first_line.windows(9).any(|w| w == b"Log Time:") {
+        hex::encode(Sha256::digest(first_line))
+    } else {
+        hex::encode(Sha256::digest(bytes))
+    }
+}
+
+/// Copies each game log into the archive, named by its session. Zwift keeps only its last ten
 /// logs, so the archive is what lets XP history outlive Zwift's rotation.
 fn archive_logs(conn: &Connection, logs_dir: &Path, archive: &Path) -> Result<usize> {
+    dedupe_archive(archive)?;
     if !logs_dir.exists() {
         eprintln!("Zwift logs folder not found: {}", logs_dir.display());
         return Ok(0);
@@ -72,9 +87,9 @@ fn archive_logs(conn: &Connection, logs_dir: &Path, archive: &Path) -> Result<us
             continue;
         }
         let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-        let sha = hex::encode(Sha256::digest(&bytes));
-        let dest = archive.join(format!("{sha}.txt"));
-        if dest.exists() {
+        let key = session_key(&bytes);
+        let dest = archive.join(format!("{key}.txt"));
+        if fs::metadata(&dest).is_ok_and(|m| m.len() >= bytes.len() as u64) {
             continue;
         }
         fs::write(&dest, &bytes)?;
@@ -86,11 +101,40 @@ fn archive_logs(conn: &Connection, logs_dir: &Path, archive: &Path) -> Result<us
         let started = first_line.split("Log Time: ").nth(1).unwrap_or_default().to_string();
         conn.execute(
             "INSERT OR REPLACE INTO log_files (sha256, original_name, log_started, bytes) VALUES (?, ?, ?, ?)",
-            params![sha, name, started, bytes.len() as i64],
+            params![key, name, started, bytes.len() as i64],
         )?;
         added += 1;
     }
+    // Rows for copies that dedupe_archive folded into their session's copy
+    let keys: Vec<String> = fs::read_dir(archive)?
+        .filter_map(|e| e.ok()?.path().file_stem()?.to_str().map(|s| format!("'{s}'")))
+        .collect();
+    if !keys.is_empty() {
+        conn.execute(&format!("DELETE FROM log_files WHERE sha256 NOT IN ({})", keys.join(",")), [])?;
+    }
     Ok(added)
+}
+
+/// Archives from before session keys held one copy per version of a log; keep the longest copy
+/// of each session under its session key.
+fn dedupe_archive(archive: &Path) -> Result<()> {
+    for entry in fs::read_dir(archive)? {
+        let path = entry?.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("txt") {
+            continue;
+        }
+        let bytes = fs::read(&path)?;
+        let target = archive.join(format!("{}.txt", session_key(&bytes)));
+        if target == path {
+            continue;
+        }
+        if fs::metadata(&target).is_ok_and(|m| m.len() >= bytes.len() as u64) {
+            fs::remove_file(&path)?;
+        } else {
+            fs::rename(&path, &target)?;
+        }
+    }
+    Ok(())
 }
 
 fn import_activities(conn: &Connection, archive: &Path) -> Result<(usize, usize)> {

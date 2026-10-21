@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
@@ -14,6 +15,7 @@ use serde_json::{Value, json};
 
 use crate::db;
 use crate::import::{self, Paths};
+use crate::watch;
 
 #[derive(Embed)]
 #[folder = "assets/"]
@@ -22,14 +24,44 @@ struct Assets;
 struct AppState {
     conn: Mutex<Connection>,
     paths: Paths,
+    /// Bumped after every import, so open explorer pages know to reload
+    imports: AtomicU64,
+    last_import: Mutex<Option<String>>,
+}
+
+impl AppState {
+    fn import(&self) -> Result<import::ImportReport> {
+        let conn = self.conn.lock().unwrap();
+        let report = import::run(&conn, &self.paths)?;
+        self.imports.fetch_add(1, Ordering::Relaxed);
+        *self.last_import.lock().unwrap() = Some(chrono::Utc::now().to_rfc3339());
+        Ok(report)
+    }
 }
 
 type Shared = Arc<AppState>;
 
 const SQL_ROW_LIMIT: usize = 5000;
 
-pub async fn serve(conn: Connection, paths: Paths, port: u16) -> Result<()> {
-    let state = Arc::new(AppState { conn: Mutex::new(conn), paths });
+pub async fn serve(conn: Connection, paths: Paths, port: u16, initial_import: bool, watch: bool) -> Result<()> {
+    let state = Arc::new(AppState {
+        conn: Mutex::new(conn),
+        paths,
+        imports: AtomicU64::new(0),
+        last_import: Mutex::new(None),
+    });
+    if initial_import {
+        crate::print_report(&state.import()?);
+    }
+    let _watcher = if watch {
+        let st = state.clone();
+        Some(watch::spawn(&state.paths, move || match st.import() {
+            Ok(r) => crate::print_report(&r),
+            Err(e) => eprintln!("import failed: {e:#}"),
+        })?)
+    } else {
+        None
+    };
     let app = Router::new()
         .route("/", get(|| asset("index.html")))
         .route("/assets/{*file}", get(|Path(file): Path<String>| asset_owned(file)))
@@ -97,6 +129,8 @@ async fn status(State(state): State<Shared>) -> Response {
             let mut row = rows.remove(0);
             row["zwift_dir"] = json!(state.paths.zwift_dir.display().to_string());
             row["data_dir"] = json!(state.paths.data_dir.display().to_string());
+            row["imports"] = json!(state.imports.load(Ordering::Relaxed));
+            row["last_import"] = json!(*state.last_import.lock().unwrap());
             Json(row).into_response()
         }
         Ok(_) => error("no status"),
@@ -105,8 +139,7 @@ async fn status(State(state): State<Shared>) -> Response {
 }
 
 async fn run_import(State(state): State<Shared>) -> Response {
-    let conn = state.conn.lock().unwrap();
-    match import::run(&conn, &state.paths) {
+    match state.import() {
         Ok(r) => Json(json!({
             "logs_archived": r.logs_archived,
             "activities": r.activities,
