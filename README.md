@@ -16,6 +16,8 @@ Zwift writes a plaintext summary to `~/Documents/Zwift/Logs/Log.txt` at the end 
 
 > **Why not the FIT file?** Zwift doesn't embed XP or Drops in the FIT files it uploads to Strava. The log file is the only reliable local source for these values.
 
+> **New:** [`zwift-hub/`](zwift-hub/) is a standalone Rust app that imports your Zwift logs, FIT files and this tool's database into DuckDB and gives you a local explorer with XP/Drops per ride, week and route, XP by source, level and Drops balance over time, and a SQL console.
+
 ## Requirements
 
 - **macOS**
