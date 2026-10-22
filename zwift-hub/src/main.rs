@@ -69,6 +69,11 @@ enum Command {
     Logout,
     /// Fetch Companion data from Zwift now (`serve` also does this every 30 minutes)
     Sync,
+    /// Add XP and Drops to Strava descriptions
+    Strava {
+        #[command(subcommand)]
+        action: StravaAction,
+    },
     /// Record your XP and Drops totals if they changed (what the background agent runs). Doesn't
     /// touch the database, so it works while the app is open
     Snapshot,
@@ -80,6 +85,14 @@ enum Command {
     },
     /// Run a read-only SQL query against the database and print the result
     Sql { query: String },
+}
+
+#[derive(Subcommand)]
+enum StravaAction {
+    /// Post rides from the last 3 days that aren't on Strava yet, and show what happened
+    Post,
+    /// Turn automatic posting in the app on or off
+    Auto { setting: String },
 }
 
 #[derive(Subcommand)]
@@ -233,6 +246,29 @@ async fn run(cli: Cli) -> Result<()> {
                 Err(e) => eprintln!("import failed: {e:#}"),
             })?;
             tokio::signal::ctrl_c().await?;
+        }
+        Command::Strava { action: StravaAction::Auto { setting } } => {
+            anyhow::ensure!(setting == "on" || setting == "off", "use `on` or `off`");
+            conn.execute("INSERT OR REPLACE INTO app_settings VALUES ('strava_auto', ?)", duckdb::params![setting])?;
+            println!("Automatic Strava posting is {setting}");
+        }
+        Command::Strava { action: StravaAction::Post } => {
+            anyhow::ensure!(strava::connected(), "Strava isn't connected; connect it on the app's Companion tab");
+            let todo = strava::pending(&conn, None)?;
+            if todo.is_empty() {
+                println!("Nothing to post: no rides with XP from the last {} days are waiting", strava::AUTO_DAYS);
+            }
+            for p in todo {
+                let outcome = strava::post(&p).await;
+                let what = match &outcome {
+                    Ok(strava::Outcome::Posted(id)) => format!("posted to https://www.strava.com/activities/{id}"),
+                    Ok(strava::Outcome::AlreadyThere(id)) => format!("already had the block (activity {id})"),
+                    Ok(strava::Outcome::NotFound) => "no matching Strava activity found".to_string(),
+                    Err(e) => format!("error: {e:#}"),
+                };
+                println!("{} UTC: {} XP, {} Drops: {what}", p.start_utc, p.xp, p.drops);
+                strava::record(&conn, &p.start_utc, &outcome)?;
+            }
         }
         Command::Sync => {
             let fetched = companion::fetch(&data_dir, true).await?;
