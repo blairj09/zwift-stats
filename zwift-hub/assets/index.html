@@ -578,7 +578,7 @@ function renderRideDetail() {
 }
 
 // ---------- strava ----------
-let stravaState = { connected: false, auto: true, auto_days: 3 };
+let stravaState = { connected: false, auto: false, auto_days: 3 };
 
 function stravaLine(r) {
   if (!stravaState.connected || r.xp == null) return '';

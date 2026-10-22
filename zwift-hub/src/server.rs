@@ -53,8 +53,9 @@ impl AppState {
     fn strava_auto(&self) -> bool {
         let conn = self.conn.lock().unwrap();
         conn.query_row("SELECT value FROM app_settings WHERE key = 'strava_auto'", [], |r| r.get::<_, String>(0))
-            .map(|v| v != "off")
-            .unwrap_or(true)
+            .map(|v| v == "on")
+            // Off until turned on: the earlier tool may already be posting the same rides
+            .unwrap_or(false)
     }
 
     /// Adds XP and Drops to Strava for new rides (or, with `only`, that one ride). Network calls
