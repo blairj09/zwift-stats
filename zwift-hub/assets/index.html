@@ -86,7 +86,7 @@
     .seg button { border: 0; background: transparent; color: var(--text-secondary); padding: 6px 12px; font: inherit; cursor: pointer; }
     .seg button + button { border-left: 1px solid var(--border); }
     .seg button[aria-pressed="true"] { background: var(--accent-bg); color: var(--text-primary); font-weight: 600; }
-    input[type="search"], input[type="email"], input[type="password"], select, textarea, button.btn {
+    input[type="search"], input[type="email"], input[type="password"], input[type="text"], select, textarea, button.btn {
       font: inherit; color: var(--text-primary); background: var(--surface-1);
       border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px;
     }
@@ -225,6 +225,23 @@
 
   <!-- Companion -->
   <section data-panel="companion" class="stack" hidden>
+    <div class="card">
+      <div class="card-head"><h2>Strava</h2></div>
+      <div id="stravaConnected" hidden>
+        <div class="controls"><label class="muted"><input type="checkbox" id="stravaAuto"> <span id="stravaAutoLabel"></span></label>
+        <button class="btn" id="stravaDisconnect">Disconnect</button></div>
+        <p class="note">Each ride's Strava description gets a block with its XP and Drops, and 🏆 for a new best per hour. Older rides can be added from their ride page.</p>
+      </div>
+      <form id="stravaForm" hidden>
+        <p class="muted">Connect Strava to add each ride's XP and Drops to its description. You need your own Strava API app: create one at strava.com/settings/api with Authorization Callback Domain set to <code>localhost</code>, then enter its Client ID and Client Secret.</p>
+        <div class="controls" style="margin-top:12px">
+          <input type="text" id="stravaClientId" placeholder="Client ID" required aria-label="Strava Client ID" inputmode="numeric">
+          <input type="password" id="stravaSecret" placeholder="Client Secret" required aria-label="Strava Client Secret">
+          <button class="btn primary" type="submit">Connect Strava</button>
+        </div>
+        <div class="muted" id="stravaConnectInfo"></div>
+      </form>
+    </div>
     <div class="card" id="signin" hidden>
       <div class="card-head"><h2>Sign in to Zwift</h2></div>
       <p class="muted">See your profile, friends riding now, upcoming events and Ride Ons here. Your password goes to Zwift once to get a sign-in token; only the token is saved, on this Mac. This uses Zwift's unofficial API, the one the Companion app uses, so it can break without notice.</p>
@@ -537,14 +554,53 @@ function renderRideDetail() {
       <button class="btn" id="closeDetail">Close</button></div>
     <p class="muted" style="margin-bottom:12px">${dayFmt.format(r.t)} at ${timeFmt.format(r.t)}${r.world ? ' · ' + esc(r.world) : ''}${r.title ? ' · ' + esc(r.title) : ''}${r.event_name ? ' · Event: ' + esc(r.event_name) : ''}</p>
     <dl class="facts">${facts.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl>
+    ${stravaLine(r)}
     ${rs.length ? '<div style="margin-top:16px"><h2 style="font-size:0.9rem;margin-bottom:8px">XP by source</h2><div class="chart-wrap short" style="height:' + (40 + rs.length * 28) + 'px"><canvas id="rideSources"></canvas></div></div>' : ''}
     ${r.earnings_source !== 'log' ? `<p class="note">${r.earnings_source === 'legacy' ? 'XP and drops from the earlier zwift-stats database; this ride\'s game log is gone, so there is no XP breakdown.' : r.earnings_source === 'api' ? (r.xp != null ? 'Recorded on another device. XP and drops are estimated from the change in your Zwift totals around this ride.' : 'Recorded on another device. XP and drops are unknown: another ride happened between the same two syncs, so the change in your totals can\'t be split between them.') : 'No XP or drops recorded for this ride: its game log was rotated away before it was archived.'}</p>` : ''}`;
   document.getElementById('closeDetail').onclick = () => { state.selected = null; renderRideDetail(); renderRides(filtered()); };
+  const postBtn = document.getElementById('postStrava');
+  if (postBtn) postBtn.onclick = async () => {
+    const info = document.getElementById('stravaInfo');
+    postBtn.disabled = true; info.textContent = 'Posting…';
+    try {
+      const res = await fetch('/api/strava/post', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ start_utc: r.start_utc }) });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error);
+      info.textContent = { posted: 'Added to Strava.', 'already there': 'Strava already had it.', 'not on Strava yet': 'No matching Strava activity found yet.', error: 'Strava returned an error; try again later.' }[body.result] ?? body.result;
+      await load();
+    } catch (x) { info.textContent = x.message; postBtn.disabled = false; }
+  };
   if (rs.length) draw('rideSources', {
     type: 'bar',
     data: { labels: rs.map(s => sourceLabel(s.source)), datasets: [barDataset(rs.map(s => s.xp), css('--xp'), 'XP')] },
     options: options(fmt0, { indexAxis: 'y', label: item => ` ${fmt0(item.raw)} XP` }),
   });
+}
+
+// ---------- strava ----------
+let stravaState = { connected: false, auto: true, auto_days: 3 };
+
+function stravaLine(r) {
+  if (!stravaState.connected || r.xp == null) return '';
+  const link = r.strava_id ? ` <a href="https://www.strava.com/activities/${r.strava_id}" target="_blank" rel="noopener">View on Strava</a>` : '';
+  const status = { posted: 'XP and Drops added to Strava.', already_there: 'Strava already has XP and Drops for this ride.',
+    not_found: 'Waiting for this ride to appear on Strava.', error: 'Posting to Strava failed; it will retry.' }[r.strava_status];
+  const done = r.strava_status === 'posted' || r.strava_status === 'already_there';
+  return `<p class="note">${status ?? 'Not on Strava yet.'}${link}
+    ${done ? '' : ` <button class="btn" id="postStrava">Add to Strava</button>`} <span class="muted" id="stravaInfo"></span></p>`;
+}
+
+async function loadStrava() {
+  try { stravaState = await fetch('/api/strava').then(x => x.json()); } catch { /* keep defaults */ }
+  renderStrava();
+}
+
+function renderStrava() {
+  const s = stravaState;
+  document.getElementById('stravaConnected').hidden = !s.connected;
+  document.getElementById('stravaForm').hidden = s.connected;
+  document.getElementById('stravaAuto').checked = s.auto;
+  document.getElementById('stravaAutoLabel').textContent = `Add XP and Drops to new Zwift rides on Strava (rides from the last ${s.auto_days} days)`;
 }
 
 function groupTable(id, list, keyFn, sortState, setSort, nameLabel) {
@@ -745,6 +801,7 @@ async function load() {
   rides = r.map(x => ({ ...x, t: new Date(x.start_utc) }));
   sources = s;
   showStatus(st);
+  loadStrava();
   const kinds = [...new Set(rides.map(x => x.kind || 'Unknown'))].sort();
   const kindSel = document.getElementById('kind');
   kindSel.innerHTML = '<option value="">All ride types</option>' + kinds.map(k => `<option>${esc(k)}</option>`).join('');
@@ -764,6 +821,28 @@ document.getElementById('importBtn').addEventListener('click', async e => {
   try { await fetch('/api/import', { method: 'POST' }); await load(); } finally { e.target.disabled = false; e.target.textContent = 'Import now'; }
 });
 document.getElementById('eventSearch').addEventListener('input', renderCompanion);
+document.getElementById('stravaAuto').addEventListener('change', async e => {
+  await fetch('/api/strava/auto', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: e.target.checked }) });
+  loadStrava();
+});
+document.getElementById('stravaDisconnect').addEventListener('click', async () => {
+  await fetch('/api/strava/disconnect', { method: 'POST' }); loadStrava();
+});
+document.getElementById('stravaForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const info = document.getElementById('stravaConnectInfo');
+  info.textContent = 'Opening Strava in your browser…';
+  try {
+    const res = await fetch('/api/strava/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: document.getElementById('stravaClientId').value.trim(), clientSecret: document.getElementById('stravaSecret').value.trim() }) });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error);
+    info.textContent = 'Approve access in your browser, then come back here.';
+    document.getElementById('stravaSecret').value = '';
+    // The approval lands in the background; check for it for a few minutes
+    for (let i = 0; i < 60 && !stravaState.connected; i++) { await new Promise(r => setTimeout(r, 5000)); await loadStrava(); }
+  } catch (x) { info.textContent = x.message; }
+});
 document.getElementById('signinForm').addEventListener('submit', async e => {
   e.preventDefault();
   const btn = document.getElementById('signinBtn'), err = document.getElementById('signinError');

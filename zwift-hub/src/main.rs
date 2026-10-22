@@ -7,6 +7,7 @@ mod import;
 mod logparse;
 mod server;
 mod service;
+mod strava;
 mod watch;
 
 use std::path::PathBuf;

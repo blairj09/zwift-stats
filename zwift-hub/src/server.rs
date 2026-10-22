@@ -14,7 +14,7 @@ use rust_embed::Embed;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::{companion, db, service};
+use crate::{companion, db, service, strava};
 use crate::import::{self, Paths};
 use crate::watch;
 
@@ -30,6 +30,10 @@ struct AppState {
     last_import: Mutex<Option<String>>,
     /// Background syncs have nowhere else to report; the Companion tab shows this
     last_sync_error: Mutex<Option<String>>,
+    /// Imports run on plain threads (the watcher); Strava posting is async and runs here
+    rt: tokio::runtime::Handle,
+    /// One Strava pass at a time, so a ride is never posted twice
+    strava_busy: tokio::sync::Mutex<()>,
 }
 
 impl AppState {
@@ -44,6 +48,61 @@ impl AppState {
         self.imports.fetch_add(1, Ordering::Relaxed);
         *self.last_import.lock().unwrap() = Some(chrono::Utc::now().to_rfc3339());
         Ok(report)
+    }
+
+    fn strava_auto(&self) -> bool {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row("SELECT value FROM app_settings WHERE key = 'strava_auto'", [], |r| r.get::<_, String>(0))
+            .map(|v| v != "off")
+            .unwrap_or(true)
+    }
+
+    /// Adds XP and Drops to Strava for new rides (or, with `only`, that one ride). Network calls
+    /// happen without holding the database.
+    async fn post_to_strava(&self, only: Option<String>) -> Result<Vec<(String, &'static str)>> {
+        if !strava::connected() || (only.is_none() && !self.strava_auto()) {
+            return Ok(Vec::new());
+        }
+        let _busy = self.strava_busy.lock().await;
+        let todo = strava::pending(&self.conn.lock().unwrap(), only.as_deref())?;
+        let mut done = Vec::new();
+        for p in todo {
+            let outcome = strava::post(&p).await;
+            let label = match &outcome {
+                Ok(strava::Outcome::Posted(_)) => "posted",
+                Ok(strava::Outcome::AlreadyThere(_)) => "already there",
+                Ok(strava::Outcome::NotFound) => "not on Strava yet",
+                Err(e) => {
+                    eprintln!("Strava: {e:#}");
+                    "error"
+                }
+            };
+            strava::record(&self.conn.lock().unwrap(), &p.start_utc, &outcome)?;
+            done.push((p.start_utc, label));
+        }
+        if !done.is_empty() {
+            self.imports.fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(done)
+    }
+
+    fn post_to_strava_soon(self: &Arc<Self>) {
+        let st = self.clone();
+        self.rt.spawn(async move {
+            if let Err(e) = st.post_to_strava(None).await {
+                eprintln!("Strava: {e:#}");
+            }
+        });
+    }
+
+    fn import_and_post(self: &Arc<Self>) {
+        match self.import() {
+            Ok(r) => {
+                crate::print_report(&r);
+                self.post_to_strava_soon();
+            }
+            Err(e) => eprintln!("import failed: {e:#}"),
+        }
     }
 
     /// `full` re-reads every activity; otherwise just the newest page.
@@ -83,10 +142,7 @@ impl Running {
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub fn import_in_background(&self) {
         let st = self.state.clone();
-        tokio::task::spawn_blocking(move || match st.import() {
-            Ok(r) => crate::print_report(&r),
-            Err(e) => eprintln!("import failed: {e:#}"),
-        });
+        tokio::task::spawn_blocking(move || st.import_and_post());
     }
 }
 
@@ -100,16 +156,15 @@ pub fn start(conn: Connection, paths: Paths, initial_import: bool, watch: bool) 
         imports: AtomicU64::new(0),
         last_import: Mutex::new(None),
         last_sync_error: Mutex::new(None),
+        rt: tokio::runtime::Handle::current(),
+        strava_busy: tokio::sync::Mutex::new(()),
     });
     if initial_import {
         crate::print_report(&state.import()?);
     }
     let watcher = if watch {
         let st = state.clone();
-        Some(watch::spawn(&state.paths, move || match st.import() {
-            Ok(r) => crate::print_report(&r),
-            Err(e) => eprintln!("import failed: {e:#}"),
-        })?)
+        Some(watch::spawn(&state.paths, move || st.import_and_post())?)
     } else {
         None
     };
@@ -125,6 +180,11 @@ pub fn start(conn: Connection, paths: Paths, initial_import: bool, watch: bool) 
         .route("/api/sync", post(run_sync))
         .route("/api/login", post(login))
         .route("/api/logout", post(logout))
+        .route("/api/strava", get(strava_status))
+        .route("/api/strava/connect", post(strava_connect))
+        .route("/api/strava/disconnect", post(strava_disconnect))
+        .route("/api/strava/auto", post(strava_set_auto))
+        .route("/api/strava/post", post(strava_post_one))
         .with_state(state.clone());
 
     if companion::signed_in(&state.paths.data_dir) {
@@ -139,6 +199,10 @@ pub fn start(conn: Connection, paths: Paths, initial_import: bool, watch: bool) 
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(30 * 60));
         loop {
             tick.tick().await;
+            // Retries rides whose Strava activity hadn't appeared yet
+            if let Err(e) = st.post_to_strava(None).await {
+                eprintln!("Strava: {e:#}");
+            }
             if companion::signed_in(&st.paths.data_dir) {
                 let empty = st
                     .conn
@@ -226,7 +290,11 @@ fn query(state: &Shared, sql: &str) -> Response {
 }
 
 async fn rides(State(state): State<Shared>) -> Response {
-    query(&state, "SELECT * FROM rides ORDER BY start_utc")
+    query(
+        &state,
+        "SELECT r.*, p.status AS strava_status, p.strava_id
+         FROM rides r LEFT JOIN strava_posts p ON p.start_utc = r.start_utc ORDER BY r.start_utc",
+    )
 }
 
 async fn xp_sources(State(state): State<Shared>) -> Response {
@@ -258,7 +326,11 @@ async fn status(State(state): State<Shared>) -> Response {
 }
 
 async fn run_import(State(state): State<Shared>) -> Response {
-    match state.import() {
+    let result = state.import();
+    if result.is_ok() {
+        state.post_to_strava_soon();
+    }
+    match result {
         Ok(r) => Json(json!({
             "logs_archived": r.logs_archived,
             "activities": r.activities,
@@ -275,6 +347,71 @@ async fn run_sync(State(state): State<Shared>) -> Response {
     match state.sync(false).await {
         Ok(r) => Json(json!({ "activities": r.activities, "followers": r.followers, "followees": r.followees, "events": r.events, "problems": r.problems }))
             .into_response(),
+        Err(e) => error(format!("{e:#}")),
+    }
+}
+
+async fn strava_status(State(state): State<Shared>) -> Response {
+    Json(json!({ "connected": strava::connected(), "auto": state.strava_auto(), "auto_days": strava::AUTO_DAYS }))
+        .into_response()
+}
+
+async fn strava_connect(Json(config): Json<strava::AppConfig>) -> Response {
+    match strava::begin_connect(config).await {
+        Ok(url) => {
+            // The app window can't host Strava's sign-in page; hand it to the default browser
+            let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+            let opened = std::process::Command::new(opener).arg(&url).spawn().is_ok();
+            Json(json!({ "url": url, "opened": opened })).into_response()
+        }
+        Err(e) => error(format!("{e:#}")),
+    }
+}
+
+async fn strava_disconnect() -> Response {
+    match strava::disconnect() {
+        Ok(()) => Json(json!({ "connected": false })).into_response(),
+        Err(e) => error(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct AutoRequest {
+    enabled: bool,
+}
+
+async fn strava_set_auto(State(state): State<Shared>, Json(req): Json<AutoRequest>) -> Response {
+    let saved = state.conn.lock().unwrap().execute(
+        "INSERT OR REPLACE INTO app_settings VALUES ('strava_auto', ?)",
+        duckdb::params![if req.enabled { "on" } else { "off" }],
+    );
+    match saved {
+        Ok(_) => {
+            if req.enabled {
+                state.post_to_strava_soon();
+            }
+            Json(json!({ "auto": req.enabled })).into_response()
+        }
+        Err(e) => error(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct PostRequest {
+    start_utc: String,
+}
+
+async fn strava_post_one(State(state): State<Shared>, Json(req): Json<PostRequest>) -> Response {
+    if !strava::connected() {
+        return error("connect Strava first, on the Companion tab");
+    }
+    // The page sends ISO times (2026-10-21T13:18:59Z); the database wants a plain UTC timestamp
+    let start = req.start_utc.trim_end_matches('Z').replacen('T', " ", 1);
+    match state.post_to_strava(Some(start)).await {
+        Ok(done) => match done.first() {
+            Some((_, label)) => Json(json!({ "result": label })).into_response(),
+            None => error("this ride has no XP and Drops to post"),
+        },
         Err(e) => error(format!("{e:#}")),
     }
 }

@@ -89,6 +89,14 @@ CREATE TABLE IF NOT EXISTS zwift_profile (
     fetched_at TIMESTAMP, raw VARCHAR
 );
 
+CREATE TABLE IF NOT EXISTS app_settings (key VARCHAR PRIMARY KEY, value VARCHAR);
+
+-- What was done for each ride on Strava (posted, already had the block, not found yet, error)
+CREATE TABLE IF NOT EXISTS strava_posts (
+    start_utc TIMESTAMP PRIMARY KEY, status VARCHAR, strava_id BIGINT, updated_at TIMESTAMP,
+    attempts BIGINT, error VARCHAR
+);
+
 -- Your XP and Drops totals at each sync. Between two of them, if you rode only once, the
 -- difference is what that ride earned: the only way to know earnings for rides recorded on
 -- another device, which leave no game log on this Mac.

@@ -48,6 +48,12 @@ Sign in on the **Companion** tab (or with `login`) to see: your profile (total X
 
 Signing in sends your password to Zwift's sign-in server once and saves only the refresh token it gets back, in `~/Library/Application Support/zwift-hub/zwift-token.json`, readable only by you. This is Zwift's unofficial API (the one the Companion app uses), so it is undocumented and can change or break without notice. The data lands in `zwift_profile`, `zwift_activities`, `zwift_follows` and `zwift_events`, each with a `raw` JSON column.
 
+## Strava
+
+On the **Companion** tab, connect Strava and each new ride's Strava description gets a block with its XP and Drops (and 🏆 for a new best per hour), the same block the earlier `zwift-stats` tool wrote. If that tool was already connected, Zwift Stats uses its Strava settings in `~/.config/zwift-stats` and needs no setup. Otherwise create a Strava API app at strava.com/settings/api with Authorization Callback Domain `localhost` and enter its Client ID and Secret; approval opens in your browser and returns to a one-off listener on localhost:8888.
+
+Rides from the last 3 days are posted automatically while the app is open (it catches up when you open it, and retries until Strava has Zwift's upload). Older rides, and rides from other devices with estimated XP and Drops (marked ≈), can be added from their ride page. A ride whose description already has the block is left alone.
+
 ## Where the data comes from
 
 | Source | What it gives | How far back |
@@ -89,6 +95,7 @@ Global options: `--db <file>` (default `~/Library/Application Support/zwift-hub/
 - `fit_files`: session summary of every FIT file
 - `legacy_rides`: rows imported from the earlier tool
 - `log_files`: archived logs
+- `strava_posts`: what was posted to Strava for each ride
 - `zwift_profile`, `zwift_activities`, `zwift_follows`, `zwift_events`: Companion data from Zwift's API
 
 ## Development

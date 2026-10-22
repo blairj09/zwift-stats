@@ -103,7 +103,13 @@ pub fn run(db_path: &Path, paths: Paths) -> Result<()> {
         .with_min_inner_size(LogicalSize::new(720.0, 520.0))
         .build(&event_loop)?;
 
-    let builder = WebViewBuilder::new();
+    // Links that open a new window (View on Strava) go to the default browser instead
+    let builder = WebViewBuilder::new().with_new_window_req_handler(|url, _| {
+        if url.starts_with("https://") {
+            let _ = std::process::Command::new("open").arg(&url).spawn();
+        }
+        wry::NewWindowResponse::Deny
+    });
     let (builder, running) = match content {
         Content::Routes(running) => {
             let router = running.router.clone();
