@@ -1,6 +1,49 @@
-# zwift-stats
+# Zwift Stats
 
-> **macOS only.** This tool relies on the macOS LaunchAgent system for background execution and expects Zwift's default file paths on macOS (`~/Documents/Zwift/`). It will not work on Windows or Linux.
+A Mac app that shows how much XP and how many Drops every Zwift ride earned you: per ride, per week and per route, as totals and per km and per hour. It can also add those numbers to the ride's description on Strava.
+
+Zwift doesn't put XP or Drops in its FIT files or its API, so Zwift Stats reads them from the log file Zwift writes on your Mac (`~/Documents/Zwift/Logs`). Everything stays on your computer in a local DuckDB database.
+
+![Zwift Stats overview: XP and Drops totals and rates, and XP per week](docs/screenshots/overview.png)
+
+![The Rides tab: XP, Drops and their per-hour and per-km rates for every ride](docs/screenshots/rides.png)
+
+<sub>Screenshots use sample data.</sub>
+
+## Install
+
+1. Download **Zwift-Stats-macOS.zip** from the [latest release](https://github.com/blairj09/zwift-stats/releases/latest).
+2. Unzip it and drag **Zwift Stats** into your Applications folder.
+3. Open it. The app isn't notarized by Apple, so the first time macOS will refuse to open it. Go to **System Settings > Privacy & Security**, scroll down and click **Open Anyway**.
+4. When asked, allow access to your Documents folder so the app can read `Documents/Zwift`.
+
+Works on Apple silicon and Intel Macs running macOS 11 or later. Your past rides are imported on first launch, and new rides appear on their own while the app runs.
+
+## What it does
+
+- **Rides, weeks and routes:** XP, Drops, XP/km, XP/hr, Drops/km and Drops/hr for every ride the log recorded.
+- **Progress:** your level and Drops balance over time, and where your XP came from.
+- **Companion (optional):** sign in with your Zwift account to see your profile, followers, Ride Ons and upcoming events, and to estimate XP for rides recorded on other devices (phone, Apple TV). Only a refresh token is saved, never your password.
+- **Strava (optional):** add a short XP and Drops note to each ride's Strava description, by hand or automatically.
+- **Explore:** a read-only SQL console over your data.
+
+See [zwift-hub/README.md](zwift-hub/README.md) for details, the command line, and the tables.
+
+## Build from source
+
+You need [Rust](https://rustup.rs) 1.90 or newer.
+
+```bash
+git clone https://github.com/blairj09/zwift-stats.git
+cd zwift-stats/zwift-hub
+./macos/build-app.sh      # builds and installs ~/Applications/Zwift Stats.app
+```
+
+`cargo run --release -- serve --open` runs the same explorer in your browser instead.
+
+## The original Strava CLI (Node)
+
+This repository started as a small Node tool that only appends XP and Drops to Strava. It still works and is documented below, but the Zwift Stats app covers the same job and reads the same Strava config, so new users should start with the app.
 
 Automatically appends Zwift XP and Drops stats to your Strava activity descriptions after every ride. Tracks personal bests and highlights them inline.
 
@@ -10,22 +53,23 @@ XP: 🏆 2,482  (🏆 1,338/hr)
 Drops: 🏆 52,385  (🏆 28,236/hr)
 ```
 
-## How it works
+### How it works
 
 Zwift writes a plaintext summary to `~/Documents/Zwift/Logs/Log.txt` at the end of every activity, including XP earned and Drops earned. A local daemon watches your Zwift Activities folder for new `.fit` files (the ride-complete signal), reads the corresponding log entry, computes per-hour rates, checks personal bests, and updates the Strava activity description — typically within 30–60 seconds of saving your ride.
 
 > **Why not the FIT file?** Zwift doesn't embed XP or Drops in the FIT files it uploads to Strava. The log file is the only reliable local source for these values.
 
-## Requirements
+
+### Requirements
 
 - **macOS**
 - **Node.js 18+**
 - **Zwift** installed with activities syncing to Strava
 - **A Strava API application** (free, takes 2 minutes to create)
 
-## Setup
+### Setup
 
-### 1. Clone, install, and link
+#### 1. Clone, install, and link
 
 ```bash
 git clone https://github.com/blairj09/zwift-stats.git
@@ -36,7 +80,7 @@ npm link
 
 `npm link` registers `zwift-stats` as a global command so you can run it from anywhere without `npm run`.
 
-### 2. Create a Strava API application
+#### 2. Create a Strava API application
 
 1. Go to [strava.com/settings/api](https://www.strava.com/settings/api)
 2. Fill in any name and website (these are just labels for your own reference)
@@ -45,7 +89,7 @@ npm link
 
 If you already have a Strava API app (e.g. for another integration), you can reuse the same credentials — each OAuth flow generates independent tokens.
 
-### 3. Authenticate with Strava
+#### 3. Authenticate with Strava
 
 ```bash
 zwift-stats auth
@@ -53,7 +97,7 @@ zwift-stats auth
 
 This prompts for your Client ID and Client Secret, opens your browser to Strava's authorization page, and saves tokens to `~/.config/zwift-stats/`. You only need to do this once.
 
-### 4. Install the daemon
+#### 4. Install the daemon
 
 ```bash
 zwift-stats daemon install
@@ -63,7 +107,7 @@ This generates a correctly-pathed LaunchAgent plist for your machine, installs i
 
 That's it. The next time you finish a Zwift ride and hit **Save**, your Strava description will be updated automatically.
 
-## CLI reference
+### CLI reference
 
 ```bash
 zwift-stats auth                        # One-time Strava OAuth setup
@@ -79,7 +123,7 @@ zwift-stats daemon uninstall            # Stop and remove the daemon
 zwift-stats daemon status               # Check whether the daemon is running
 ```
 
-## Backfill
+### Backfill
 
 If you installed `zwift-stats` after riding for a while, or if the daemon missed some rides, you can retroactively process historical rides:
 
@@ -89,7 +133,7 @@ zwift-stats backfill
 
 This scans all log files in `~/Documents/Zwift/Logs/` (including rotated `Log (old N).txt` files), discovers every completed ride, and processes any not already in the local database. XP and Drops are read from the log file that recorded each session. Rides whose `.fit` files are no longer on disk are skipped gracefully.
 
-## Stats and charts
+### Stats and charts
 
 Two commands let you explore your accumulated XP and Drops history.
 
@@ -115,7 +159,7 @@ Personal Bests
 - **XP per ride** — bar chart of your most recent 50 rides
 - **XP/hr efficiency** — your intensity trend over time
 
-## Personal bests
+### Personal bests
 
 Personal bests are tracked globally across all rides in a local SQLite database at `~/.local/share/zwift-stats/bests.db`. Four metrics are tracked:
 
@@ -135,11 +179,11 @@ XP: 🏆 2,482  (1,338/hr)       ← total PR only
 XP: 2,482  (1,338/hr)          ← neither
 ```
 
-## Duplicate activity handling
+### Duplicate activity handling
 
 If Strava has multiple Virtual Ride activities in the same time window (e.g. a duplicate from a different recording device), the tool identifies the Zwift-uploaded activity by its `external_id` field (`zwift-activity-...`), which Strava sets when Zwift uploads the file directly.
 
-## Long-term maintenance
+### Long-term maintenance
 
 This tool is designed to be set-and-forget:
 
@@ -147,7 +191,7 @@ This tool is designed to be set-and-forget:
 - **Zwift updates** occasionally change log formatting. If descriptions stop updating, run `zwift-stats process <file> --dry-run` to diagnose. The relevant patterns are in `src/log-parser.ts`.
 - **After moving the project** to a different directory, re-run `zwift-stats daemon install` to regenerate the plist with updated paths.
 
-## Project structure
+### Project structure
 
 ```
 src/

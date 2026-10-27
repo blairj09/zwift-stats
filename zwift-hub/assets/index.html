@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Zwift Stats</title>
+  <link rel="icon" href="data:,">
+  <script src="/assets/chart.umd.js"></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --surface-0: #f4f3f0;
+      --surface-1: #fcfcfb;
+      --text-primary: #0b0b0b;
+      --text-secondary: #52514e;
+      --text-muted: #898781;
+      --grid: #e1e0d9;
+      --border: rgba(11, 11, 11, 0.10);
+      --accent-bg: rgba(42, 120, 214, 0.10);
+      --xp: #2a78d6;
+      --drops: #eb6834;
+      --distance: #1baf7a;
+      --time: #6250d6;
+      --error: #c42b2b;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        color-scheme: dark;
+        --surface-0: #111110;
+        --surface-1: #1a1a19;
+        --text-primary: #f0efec;
+        --text-secondary: #c3c2b7;
+        --text-muted: #898781;
+        --grid: #2c2c2a;
+        --border: rgba(255, 255, 255, 0.10);
+        --accent-bg: rgba(57, 135, 229, 0.18);
+        --xp: #3987e5;
+        --drops: #d95926;
+        --distance: #199e70;
+        --time: #9085e9;
+        --error: #e66767;
+      }
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --surface-0: #111110;
+      --surface-1: #1a1a19;
+      --text-primary: #f0efec;
+      --text-secondary: #c3c2b7;
+      --text-muted: #898781;
+      --grid: #2c2c2a;
+      --border: rgba(255, 255, 255, 0.10);
+      --accent-bg: rgba(57, 135, 229, 0.18);
+      --xp: #3987e5;
+      --drops: #d95926;
+      --distance: #199e70;
+      --time: #9085e9;
+      --error: #e66767;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    [hidden] { display: none !important; }
+    body {
+      background: var(--surface-0);
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 14px;
+      line-height: 1.4;
+      padding: 20px 16px 48px;
+    }
+    main { max-width: 1200px; margin: 0 auto; display: grid; gap: 20px; }
+    header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+    h1 { font-size: 1.35rem; font-weight: 650; }
+    .muted { color: var(--text-muted); }
+    nav { display: flex; gap: 4px; flex-wrap: wrap; }
+    nav button {
+      border: 0; background: transparent; color: var(--text-secondary); font: inherit;
+      padding: 6px 12px; border-radius: 8px; cursor: pointer;
+    }
+    nav button[aria-selected="true"] { background: var(--accent-bg); color: var(--text-primary); font-weight: 600; }
+    section[hidden] { display: none !important; }
+    .stack { display: grid; gap: 20px; }
+
+    .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+    .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface-1); }
+    .seg button { border: 0; background: transparent; color: var(--text-secondary); padding: 6px 12px; font: inherit; cursor: pointer; }
+    .seg button + button { border-left: 1px solid var(--border); }
+    .seg button[aria-pressed="true"] { background: var(--accent-bg); color: var(--text-primary); font-weight: 600; }
+    input[type="search"], input[type="email"], input[type="password"], input[type="text"], select, textarea, button.btn {
+      font: inherit; color: var(--text-primary); background: var(--surface-1);
+      border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px;
+    }
+    button.btn { cursor: pointer; }
+    button.btn.primary { background: var(--xp); color: #fff; border-color: transparent; }
+    input[type="search"] { flex: 1 1 200px; max-width: 320px; }
+    #signinForm { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+    #signinForm input { flex: 1 1 200px; max-width: 280px; }
+
+    .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    @media (max-width: 800px) { .tiles { grid-template-columns: repeat(2, 1fr); } }
+    .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+    .tile .label { font-size: 0.78rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.06em; display: flex; align-items: center; gap: 6px; }
+    .tile .value { font-size: 1.5rem; font-weight: 650; margin-top: 4px; font-variant-numeric: tabular-nums; }
+    .tile .sub { font-size: 0.8rem; color: var(--text-muted); margin-top: 2px; font-variant-numeric: tabular-nums; }
+    .swatch { width: 8px; height: 8px; border-radius: 2px; display: inline-block; flex: none; }
+
+    ul.plain { list-style: none; margin: 0; padding: 0; }
+    ul.plain li { padding: 6px 0; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; gap: 12px; }
+    ul.plain li:last-child { border-bottom: 0; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 800px) { .grid2 { grid-template-columns: 1fr; } }
+    .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 16px; min-width: 0; }
+    .card-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 12px; }
+    .card h2 { font-size: 0.95rem; font-weight: 600; }
+    .note { font-size: 0.8rem; color: var(--text-muted); margin-top: 8px; }
+    .chart-wrap { position: relative; height: 280px; }
+    .chart-wrap.short { height: 220px; }
+
+    .table-wrap { overflow-x: auto; max-height: 640px; overflow-y: auto; }
+    table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+    th, td { padding: 7px 10px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--grid); }
+    th.left, td.left { text-align: left; }
+    td.name { white-space: normal; min-width: 180px; }
+    th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); cursor: pointer; user-select: none; position: sticky; top: 0; background: var(--surface-1); }
+    th[aria-sort="ascending"]::after { content: " ▲"; }
+    th[aria-sort="descending"]::after { content: " ▼"; }
+    tbody tr:hover { background: var(--accent-bg); }
+    tbody tr.clickable { cursor: pointer; }
+    tbody tr.selected { background: var(--accent-bg); }
+    .empty { padding: 32px; text-align: center; color: var(--text-muted); }
+    .tag { display: inline-block; font-size: 0.72rem; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-secondary); margin-left: 6px; }
+
+    dl.facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px 20px; }
+    dl.facts dt { font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; }
+    dl.facts dd { font-size: 1.05rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+    textarea { width: 100%; min-height: 120px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; resize: vertical; }
+    .examples { display: flex; flex-wrap: wrap; gap: 8px; }
+    .examples button { font-size: 0.8rem; }
+    .error { color: var(--error); white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Zwift Stats</h1>
+    <nav role="tablist" id="tabs">
+      <button role="tab" data-tab="overview">Overview</button>
+      <button role="tab" data-tab="rides">Rides</button>
+      <button role="tab" data-tab="routes">Routes</button>
+      <button role="tab" data-tab="progress">Progress</button>
+      <button role="tab" data-tab="companion">Companion</button>
+      <button role="tab" data-tab="explore">Explore</button>
+    </nav>
+    <div class="controls">
+      <span class="muted" id="statusLine"></span>
+      <button class="btn" id="importBtn">Import now</button>
+    </div>
+  </header>
+
+  <div class="controls" id="filters">
+    <div class="seg" id="range" role="group" aria-label="Date range">
+      <button data-range="28">4 wk</button>
+      <button data-range="84">12 wk</button>
+      <button data-range="182">6 mo</button>
+      <button data-range="365">1 yr</button>
+      <button data-range="all">All</button>
+    </div>
+    <select id="kind" aria-label="Ride type"><option value="">All ride types</option></select>
+    <input type="search" id="search" placeholder="Filter by route, world or title" aria-label="Filter by route, world or title">
+    <label class="muted"><input type="checkbox" id="xpOnly" checked> Only rides with XP data</label>
+  </div>
+
+  <!-- Overview -->
+  <section data-panel="overview" class="stack">
+    <div class="tiles" id="tiles"></div>
+    <div class="card">
+      <div class="card-head"><h2 id="weeklyTitle">Per week</h2><select id="weeklyMetric" aria-label="Weekly metric"></select></div>
+      <div class="chart-wrap"><canvas id="weeklyChart"></canvas></div>
+      <p class="note">Weeks start Monday. Week rates are week totals over week time or distance.</p>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2 id="trendTitle">Per ride</h2><select id="trendMetric" aria-label="Per-ride metric"></select></div>
+      <div class="chart-wrap"><canvas id="trendChart"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Where XP comes from</h2><span class="muted">From the game log's XP grants; "not itemized" is XP Zwift awarded without logging a source</span></div>
+      <div class="chart-wrap short"><canvas id="sourcesChart"></canvas></div>
+    </div>
+  </section>
+
+  <!-- Rides -->
+  <section data-panel="rides" class="stack" hidden>
+    <div class="card" id="rideDetail" hidden></div>
+    <div class="card">
+      <div class="card-head"><h2>Rides</h2><span class="muted" id="rideCount"></span></div>
+      <div class="table-wrap"><table id="rideTable"></table></div>
+    </div>
+  </section>
+
+  <!-- Routes -->
+  <section data-panel="routes" class="stack" hidden>
+    <div class="card">
+      <div class="card-head"><h2>By route</h2><span class="muted">Totals over time and distance, so long rides weigh more</span></div>
+      <div class="table-wrap"><table id="routeTable"></table></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>By ride type</h2></div>
+      <div class="table-wrap"><table id="kindTable"></table></div>
+    </div>
+  </section>
+
+  <!-- Progress -->
+  <section data-panel="progress" class="stack" hidden>
+    <div class="grid2">
+      <div class="card"><div class="card-head"><h2>Total XP</h2></div><div class="chart-wrap short"><canvas id="totalXp"></canvas></div></div>
+      <div class="card"><div class="card-head"><h2>Drops balance</h2></div><div class="chart-wrap short"><canvas id="totalDrops"></canvas></div></div>
+    </div>
+    <div class="grid2">
+      <div class="card"><div class="card-head"><h2>XP earned, cumulative</h2></div><div class="chart-wrap short"><canvas id="cumXp"></canvas></div></div>
+      <div class="card"><div class="card-head"><h2>Drops earned, cumulative</h2></div><div class="chart-wrap short"><canvas id="cumDrops"></canvas></div></div>
+    </div>
+    <p class="note">Totals and level come from the game log, so they start with the oldest log in your archive. Cumulative charts include every ride with XP data.</p>
+  </section>
+
+  <!-- Companion -->
+  <section data-panel="companion" class="stack" hidden>
+    <div class="card">
+      <div class="card-head"><h2>Strava</h2></div>
+      <div id="stravaConnected" hidden>
+        <div class="controls"><label class="muted"><input type="checkbox" id="stravaAuto"> <span id="stravaAutoLabel"></span></label>
+        <button class="btn" id="stravaDisconnect">Disconnect</button></div>
+        <p class="note">Each ride's Strava description gets a block with its XP and Drops, and 🏆 for a new best per hour. Older rides can be added from their ride page.</p>
+      </div>
+      <form id="stravaForm" hidden>
+        <p class="muted">Connect Strava to add each ride's XP and Drops to its description. You need your own Strava API app: create one at strava.com/settings/api with Authorization Callback Domain set to <code>localhost</code>, then enter its Client ID and Client Secret.</p>
+        <div class="controls" style="margin-top:12px">
+          <input type="text" id="stravaClientId" placeholder="Client ID" required aria-label="Strava Client ID" inputmode="numeric">
+          <input type="password" id="stravaSecret" placeholder="Client Secret" required aria-label="Strava Client Secret">
+          <button class="btn primary" type="submit">Connect Strava</button>
+        </div>
+        <div class="muted" id="stravaConnectInfo"></div>
+      </form>
+    </div>
+    <div class="card" id="signin" hidden>
+      <div class="card-head"><h2>Sign in to Zwift</h2></div>
+      <p class="muted">See your profile, friends riding now, upcoming events and Ride Ons here. Your password goes to Zwift once to get a sign-in token; only the token is saved, on this Mac. This uses Zwift's unofficial API, the one the Companion app uses, so it can break without notice.</p>
+      <form id="signinForm">
+        <input type="email" id="zwEmail" placeholder="Zwift email" autocomplete="username" required aria-label="Zwift email">
+        <input type="password" id="zwPassword" placeholder="Password" autocomplete="current-password" required aria-label="Zwift password">
+        <button class="btn primary" type="submit" id="signinBtn">Sign in</button>
+      </form>
+      <div class="error" id="signinError"></div>
+    </div>
+    <div class="controls" id="signedInAs" hidden><span class="muted" id="signedInName"></span><button class="btn" id="signoutBtn">Sign out</button></div>
+    <div class="tiles" id="profileTiles"></div>
+    <div class="grid2">
+      <div class="card">
+        <div class="card-head"><h2>Riding now</h2><span class="muted" id="followCounts"></span></div>
+        <ul class="plain" id="ridingNow"></ul>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Ride Ons on your recent rides</h2></div>
+        <div class="table-wrap"><table id="zwActivities"></table></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Upcoming events</h2>
+        <div class="controls"><input type="search" id="eventSearch" placeholder="Filter events" aria-label="Filter events">
+        <button class="btn" id="syncBtn">Sync now</button><span class="muted" id="syncInfo"></span></div></div>
+      <div class="table-wrap"><table id="zwEvents"></table></div>
+    </div>
+  </section>
+
+  <!-- Explore -->
+  <section data-panel="explore" class="stack" hidden>
+    <div class="card stack">
+      <div class="card-head" style="margin:0"><h2>SQL</h2><span class="muted">DuckDB, read-only. Tables: rides, activities, xp_sources, fit_files, legacy_rides, zwift_profile, zwift_activities, zwift_follows, zwift_events</span></div>
+      <div class="examples" id="examples"></div>
+      <textarea id="sqlInput" spellcheck="false" aria-label="SQL query"></textarea>
+      <div class="controls"><button class="btn primary" id="runSql">Run</button><span class="muted">Ctrl/⌘ + Enter</span><span class="muted" id="sqlInfo"></span></div>
+      <div class="error" id="sqlError"></div>
+    </div>
+    <div class="card" id="sqlChartCard" hidden>
+      <div class="card-head"><h2>Chart</h2><label class="muted">First column by <select id="sqlChartY" aria-label="Column to chart"></select></label></div>
+      <div class="chart-wrap"><canvas id="sqlChart"></canvas></div>
+    </div>
+    <div class="card"><div class="table-wrap"><table id="sqlTable"></table></div></div>
+  </section>
+</main>
+
+<script>
+// ---------- formatting ----------
+const nf0 = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
+const nf1 = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1, minimumFractionDigits: 1 });
+const ok = v => v !== null && v !== undefined && isFinite(v);
+const fmt0 = v => (ok(v) ? nf0.format(v) : '–');
+const fmt1 = v => (ok(v) ? nf1.format(v) : '–');
+const fmtHours = s => {
+  if (!s) return '–';
+  const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+  return h ? h + 'h ' + String(m).padStart(2, '0') + 'm' : m + 'm';
+};
+const dayFmt = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+const shortDay = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' });
+const timeFmt = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const XP_SOURCE_LABELS = {
+  XP_DISTANCE: 'Distance', XP_WORKOUT: 'Workout', XP_CONFETTI_SOCKS: 'Route badge', XP_POWERUP: 'Power-ups',
+  XP_STREAK_BONUS: 'Streak bonus', XP_SERVER_DRIVEN: 'Server bonus', XP_ACHIEVEMENT: 'Achievement',
+  UNITEMIZED: 'Not itemized in log',
+};
+const sourceLabel = s => XP_SOURCE_LABELS[s] || s.replace(/^XP_/, '').toLowerCase().replace(/_/g, ' ');
+
+// ---------- state ----------
+const store = {
+  get(k, d) { try { return localStorage.getItem('zh.' + k) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('zh.' + k, v); } catch {} },
+};
+const RANGES = ['28', '84', '182', '365', 'all'];
+const state = {
+  tab: store.get('tab', 'overview'),
+  range: RANGES.includes(store.get('range', '84')) ? store.get('range', '84') : '84',
+  kind: '',
+  search: '',
+  xpOnly: true,
+  weeklyMetric: store.get('weeklyMetric', 'xp'),
+  trendMetric: store.get('trendMetric', 'xp_per_hour'),
+  rideSort: { key: 't', dir: -1 },
+  routeSort: { key: 'drops_per_hour', dir: -1 },
+  kindSort: { key: 'rides', dir: -1 },
+  selected: null,
+};
+let rides = [], sources = [];
+
+const METRICS = {
+  xp:             { label: 'XP',              color: '--xp',       fmt: fmt0 },
+  drops:          { label: 'Drops',           color: '--drops',    fmt: fmt0 },
+  km:             { label: 'Distance (km)',   color: '--distance', fmt: fmt1 },
+  hours:          { label: 'Time (hours)',    color: '--time',     fmt: fmt1 },
+  xp_per_hour:    { label: 'XP per hour',     color: '--xp',       fmt: fmt0 },
+  xp_per_km:      { label: 'XP per km',       color: '--xp',       fmt: fmt1 },
+  drops_per_hour: { label: 'Drops per hour',  color: '--drops',    fmt: fmt0 },
+  drops_per_km:   { label: 'Drops per km',    color: '--drops',    fmt: fmt0 },
+};
+const WEEKLY_METRICS = ['xp', 'drops', 'km', 'hours', 'xp_per_hour', 'xp_per_km', 'drops_per_hour', 'drops_per_km'];
+const TREND_METRICS = ['xp_per_hour', 'xp_per_km', 'drops_per_hour', 'drops_per_km', 'xp', 'drops', 'km'];
+
+function weekStart(d) {
+  const x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x;
+}
+
+/** Totals and rates over rides. Rates use only rides that have both the earning and the denominator. */
+function aggregate(list) {
+  const sum = (l, f) => l.reduce((s, r) => s + (f(r) || 0), 0);
+  const withXp = list.filter(r => ok(r.xp));
+  const timed = withXp.filter(r => r.hours > 0), dist = withXp.filter(r => r.km > 0);
+  return {
+    rides: list.length,
+    xp: withXp.length ? sum(withXp, r => r.xp) : null,
+    drops: withXp.length ? sum(withXp, r => r.drops) : null,
+    km: sum(list, r => r.km), hours: sum(list, r => r.hours),
+    elevation: sum(list, r => r.elevation_m),
+    xp_per_hour: sum(timed, r => r.hours) ? sum(timed, r => r.xp) / sum(timed, r => r.hours) : null,
+    drops_per_hour: sum(timed, r => r.hours) ? sum(timed, r => r.drops) / sum(timed, r => r.hours) : null,
+    xp_per_km: sum(dist, r => r.km) ? sum(dist, r => r.xp) / sum(dist, r => r.km) : null,
+    drops_per_km: sum(dist, r => r.km) ? sum(dist, r => r.drops) / sum(dist, r => r.km) : null,
+  };
+}
+
+function filtered() {
+  let list = rides;
+  if (state.range !== 'all') {
+    const cutoff = new Date(); cutoff.setHours(0, 0, 0, 0); cutoff.setDate(cutoff.getDate() - Number(state.range));
+    list = list.filter(r => r.t >= cutoff);
+  }
+  if (state.kind) list = list.filter(r => (r.kind || 'Unknown') === state.kind);
+  if (state.xpOnly) list = list.filter(r => ok(r.xp));
+  const q = state.search.trim().toLowerCase();
+  if (q) list = list.filter(r => [r.route, r.world, r.title, r.event_name].some(v => (v || '').toLowerCase().includes(q)));
+  return list;
+}
+
+// ---------- charts ----------
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+function withAlpha(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+}
+const charts = {};
+function draw(id, config) {
+  if (charts[id]) charts[id].destroy();
+  charts[id] = new Chart(document.getElementById(id), config);
+}
+function options(yFmt, { title, label, legend = false, indexAxis } = {}) {
+  Chart.defaults.color = css('--text-muted');
+  Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+  const valueAxis = { beginAtZero: true, grid: { color: css('--grid') }, border: { display: false }, ticks: { callback: v => yFmt(v), maxTicksLimit: 6 } };
+  // Horizontal bars label every category; time axes skip labels to fit
+  const catAxis = { grid: { display: false }, border: { color: css('--grid') }, ticks: indexAxis === 'y' ? { autoSkip: false } : { maxRotation: 0, autoSkipPadding: 16 } };
+  return {
+    responsive: true, maintainAspectRatio: false, animation: false, indexAxis,
+    interaction: { mode: 'index', intersect: false },
+    scales: indexAxis === 'y' ? { x: valueAxis, y: catAxis } : { x: catAxis, y: valueAxis },
+    plugins: {
+      legend: legend ? { display: true, position: 'top', align: 'end', labels: { usePointStyle: true, boxWidth: 8, boxHeight: 8, color: css('--text-secondary') } } : { display: false },
+      tooltip: {
+        backgroundColor: css('--surface-1'), titleColor: css('--text-primary'), bodyColor: css('--text-secondary'),
+        borderColor: css('--border'), borderWidth: 1, padding: 10, boxPadding: 4,
+        callbacks: { ...(title ? { title } : {}), ...(label ? { label } : {}) },
+      },
+    },
+  };
+}
+const barDataset = (data, color, label) => ({ label, data, backgroundColor: color, borderRadius: 4, borderSkipped: 'start', maxBarThickness: 36, categoryPercentage: 0.9, barPercentage: 0.9 });
+
+// ---------- overview ----------
+function renderTiles(list) {
+  const a = aggregate(list);
+  const tw0 = weekStart(new Date()), lw0 = new Date(tw0); lw0.setDate(lw0.getDate() - 7);
+  const tw = aggregate(list.filter(r => r.t >= tw0)), lw = aggregate(list.filter(r => r.t >= lw0 && r.t < tw0));
+  const sub = (k, f) => `This week ${f(tw.rides ? tw[k] : null)} · last ${f(lw.rides ? lw[k] : null)}`;
+  const tiles = [
+    ['XP', fmt0(a.xp), sub('xp', fmt0), '--xp'],
+    ['Drops', fmt0(a.drops), sub('drops', fmt0), '--drops'],
+    ['XP / hour', fmt0(a.xp_per_hour), sub('xp_per_hour', fmt0), '--xp'],
+    ['XP / km', fmt1(a.xp_per_km), sub('xp_per_km', fmt1), '--xp'],
+    ['Drops / hour', fmt0(a.drops_per_hour), sub('drops_per_hour', fmt0), '--drops'],
+    ['Drops / km', fmt0(a.drops_per_km), sub('drops_per_km', fmt0), '--drops'],
+    ['Distance', fmt0(a.km) + ' km', sub('km', fmt0), '--distance'],
+    ['Time', fmtHours(a.hours * 3600), `${a.rides} ride${a.rides === 1 ? '' : 's'} · ${tw.rides} this week`, '--time'],
+  ];
+  document.getElementById('tiles').innerHTML = tiles.map(([label, value, s, color]) => `
+    <div class="tile"><div class="label"><span class="swatch" style="background:var(${color})"></span>${label}</div>
+    <div class="value">${value}</div><div class="sub">${s}</div></div>`).join('');
+}
+
+function renderWeekly(list) {
+  const key = state.weeklyMetric, m = METRICS[key];
+  document.getElementById('weeklyTitle').textContent = m.label + ' per week';
+  const groups = new Map();
+  if (list.length) for (let w = weekStart(list[0].t); w <= list[list.length - 1].t; w.setDate(w.getDate() + 7)) groups.set(w.getTime(), []);
+  list.forEach(r => groups.get(weekStart(r.t).getTime()).push(r));
+  const weeks = [...groups.entries()];
+  const isRate = key.includes('_per_');
+  const values = weeks.map(([, l]) => (l.length ? aggregate(l)[key] : (isRate ? null : 0)));
+  draw('weeklyChart', {
+    type: 'bar',
+    data: { labels: weeks.map(([t]) => shortDay.format(new Date(t))), datasets: [barDataset(values, css(m.color), m.label)] },
+    options: options(m.fmt, {
+      title: items => 'Week of ' + dayFmt.format(new Date(weeks[items[0].dataIndex][0])),
+      label: item => { const n = weeks[item.dataIndex][1].length; return ` ${m.label}: ${m.fmt(item.raw)} (${n} ride${n === 1 ? '' : 's'})`; },
+    }),
+  });
+}
+
+function renderTrend(list) {
+  const key = state.trendMetric, m = METRICS[key];
+  document.getElementById('trendTitle').textContent = m.label + ' per ride';
+  const pts = list.filter(r => ok(r[key]));
+  const avg = pts.map((_, i) => { const s = pts.slice(Math.max(0, i - 4), i + 1); return s.reduce((a, r) => a + r[key], 0) / s.length; });
+  const color = css(m.color);
+  draw('trendChart', {
+    type: 'line',
+    data: {
+      labels: pts.map(r => shortDay.format(r.t)),
+      datasets: [
+        { label: 'Each ride', data: pts.map(r => r[key]), showLine: false, pointRadius: 4, pointHoverRadius: 6,
+          pointBackgroundColor: withAlpha(color, 0.45), pointBorderColor: css('--surface-1'), pointBorderWidth: 2 },
+        { label: '5-ride average', data: avg, borderColor: color, borderWidth: 2, pointRadius: 0, tension: 0.3 },
+      ],
+    },
+    options: options(m.fmt, {
+      legend: true,
+      title: items => (pts[items[0].dataIndex].route || 'Ride') + ' · ' + dayFmt.format(pts[items[0].dataIndex].t),
+      label: item => ` ${item.dataset.label}: ${m.fmt(item.raw)}`,
+    }),
+  });
+}
+
+function renderSources(list) {
+  const starts = new Set(list.map(r => r.start_utc));
+  const totals = {};
+  sources.filter(s => starts.has(s.start_utc)).forEach(s => { totals[s.source] = (totals[s.source] || 0) + s.xp; });
+  const entries = Object.entries(totals).sort((a, b) => b[1] - a[1]);
+  const all = entries.reduce((s, [, v]) => s + v, 0);
+  draw('sourcesChart', {
+    type: 'bar',
+    data: { labels: entries.map(([k]) => sourceLabel(k)), datasets: [barDataset(entries.map(([, v]) => v), css('--xp'), 'XP')] },
+    options: options(fmt0, { indexAxis: 'y', label: item => ` ${fmt0(item.raw)} XP (${Math.round(item.raw / all * 100)}%)` }),
+  });
+}
+
+// ---------- tables ----------
+function sortableTable(el, columns, rows, sort, onSort, { onRow, selectedKey } = {}) {
+  const sorted = [...rows].sort((a, b) => {
+    const x = a[sort.key], y = b[sort.key];
+    if (x === null || x === undefined) return 1;
+    if (y === null || y === undefined) return -1;
+    return (x < y ? -1 : x > y ? 1 : 0) * sort.dir;
+  });
+  el.innerHTML = '<thead><tr>' + columns.map(c =>
+    `<th data-key="${c.key}" class="${c.left ? 'left' : ''}" ${c.key === sort.key ? `aria-sort="${sort.dir > 0 ? 'ascending' : 'descending'}"` : ''}>${c.label}</th>`
+  ).join('') + '</tr></thead><tbody>' + (sorted.length ? sorted.map((r, i) =>
+    `<tr data-i="${i}" class="${onRow ? 'clickable' : ''} ${selectedKey && selectedKey(r) ? 'selected' : ''}">` +
+    columns.map(c => `<td class="${c.left ? 'left' : ''} ${c.cls || ''}">${c.render ? c.render(r) : c.fmt(r[c.key])}</td>`).join('') + '</tr>'
+  ).join('') : `<tr><td colspan="${columns.length}" class="empty">No rides match.</td></tr>`) + '</tbody>';
+  el.querySelectorAll('th').forEach(th => th.addEventListener('click', () => {
+    const key = th.dataset.key;
+    onSort(sort.key === key ? { key, dir: -sort.dir } : { key, dir: columns.find(c => c.key === key).left ? 1 : -1 });
+  }));
+  if (onRow) el.querySelectorAll('tbody tr[data-i]').forEach(tr => tr.addEventListener('click', () => onRow(sorted[Number(tr.dataset.i)])));
+}
+
+const rideName = r => r.route || r.title || 'Ride';
+function renderRides(list) {
+  document.getElementById('rideCount').textContent = `${list.length} ride${list.length === 1 ? '' : 's'}`;
+  sortableTable(document.getElementById('rideTable'), [
+    { key: 't', label: 'Date', render: r => dayFmt.format(r.t) },
+    { key: 'route', label: 'Route', left: true, cls: 'name', render: r => esc(rideName(r)) + (r.kind ? `<span class="tag">${esc(r.kind)}</span>` : '') },
+    { key: 'world', label: 'World', left: true, render: r => esc(r.world || '–') },
+    { key: 'km', label: 'km', fmt: fmt1 },
+    { key: 'duration_s', label: 'Time', render: r => fmtHours(r.duration_s) },
+    { key: 'elevation_m', label: 'Climb m', fmt: fmt0 },
+    { key: 'avg_power', label: 'Avg W', fmt: fmt0 },
+    { key: 'xp', label: 'XP', fmt: fmt0 },
+    { key: 'xp_per_hour', label: 'XP/hr', fmt: fmt0 },
+    { key: 'xp_per_km', label: 'XP/km', fmt: fmt1 },
+    { key: 'drops', label: 'Drops', fmt: fmt0 },
+    { key: 'drops_per_hour', label: 'Drops/hr', fmt: fmt0 },
+    { key: 'drops_per_km', label: 'Drops/km', fmt: fmt0 },
+  ], list, state.rideSort, s => { state.rideSort = s; renderRides(filtered()); }, {
+    onRow: r => { state.selected = r.start_utc; renderRideDetail(); renderRides(filtered()); window.scrollTo({ top: 0, behavior: 'smooth' }); },
+    selectedKey: r => r.start_utc === state.selected,
+  });
+}
+
+function renderRideDetail() {
+  const el = document.getElementById('rideDetail');
+  const r = rides.find(x => x.start_utc === state.selected);
+  if (!r) { el.hidden = true; return; }
+  el.hidden = false;
+  const rs = sources.filter(s => s.start_utc === r.start_utc).sort((a, b) => b.xp - a.xp);
+  const facts = [
+    ['XP', fmt0(r.xp)], ['Drops', fmt0(r.drops)], ['XP / hour', fmt0(r.xp_per_hour)], ['XP / km', fmt1(r.xp_per_km)],
+    ['Drops / hour', fmt0(r.drops_per_hour)], ['Drops / km', fmt0(r.drops_per_km)], ['Distance', fmt1(r.km) + ' km'],
+    ['Time', fmtHours(r.duration_s)], ['Climbing', fmt0(r.elevation_m) + ' m'], ['Avg power', ok(r.avg_power) ? fmt0(r.avg_power) + ' W' : '–'],
+    ['Normalized power', ok(r.normalized_power) ? fmt0(r.normalized_power) + ' W' : '–'], ['Avg HR', ok(r.avg_hr) ? fmt0(r.avg_hr) + ' bpm' : '–'],
+    ['Calories', fmt0(r.calories)], ['Level after', fmt0(r.level)], ['Streak', ok(r.streak_weeks) ? r.streak_weeks + ' weeks' : '–'],
+    ['Ride Ons received', fmt0(r.ride_ons_received)], ['Ride Ons given', fmt0(r.ride_ons_given)],
+  ];
+  el.innerHTML = `
+    <div class="card-head"><h2>${esc(rideName(r))}${r.kind ? `<span class="tag">${esc(r.kind)}</span>` : ''}</h2>
+      <button class="btn" id="closeDetail">Close</button></div>
+    <p class="muted" style="margin-bottom:12px">${dayFmt.format(r.t)} at ${timeFmt.format(r.t)}${r.world ? ' · ' + esc(r.world) : ''}${r.title ? ' · ' + esc(r.title) : ''}${r.event_name ? ' · Event: ' + esc(r.event_name) : ''}</p>
+    <dl class="facts">${facts.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl>
+    ${stravaLine(r)}
+    ${rs.length ? '<div style="margin-top:16px"><h2 style="font-size:0.9rem;margin-bottom:8px">XP by source</h2><div class="chart-wrap short" style="height:' + (40 + rs.length * 28) + 'px"><canvas id="rideSources"></canvas></div></div>' : ''}
+    ${r.earnings_source !== 'log' ? `<p class="note">${r.earnings_source === 'legacy' ? 'XP and drops from the earlier zwift-stats database; this ride\'s game log is gone, so there is no XP breakdown.' : r.earnings_source === 'api' ? (r.xp != null ? 'Recorded on another device. XP and drops are estimated from the change in your Zwift totals around this ride.' : 'Recorded on another device. XP and drops are unknown: another ride happened between the same two syncs, so the change in your totals can\'t be split between them.') : 'No XP or drops recorded for this ride: its game log was rotated away before it was archived.'}</p>` : ''}`;
+  document.getElementById('closeDetail').onclick = () => { state.selected = null; renderRideDetail(); renderRides(filtered()); };
+  const postBtn = document.getElementById('postStrava');
+  if (postBtn) postBtn.onclick = async () => {
+    const info = document.getElementById('stravaInfo');
+    postBtn.disabled = true; info.textContent = 'Posting…';
+    try {
+      const res = await fetch('/api/strava/post', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ start_utc: r.start_utc }) });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error);
+      info.textContent = { posted: 'Added to Strava.', 'already there': 'Strava already had it.', 'not on Strava yet': 'No matching Strava activity found yet.', error: 'Strava returned an error; try again later.' }[body.result] ?? body.result;
+      await load();
+    } catch (x) { info.textContent = x.message; postBtn.disabled = false; }
+  };
+  if (rs.length) draw('rideSources', {
+    type: 'bar',
+    data: { labels: rs.map(s => sourceLabel(s.source)), datasets: [barDataset(rs.map(s => s.xp), css('--xp'), 'XP')] },
+    options: options(fmt0, { indexAxis: 'y', label: item => ` ${fmt0(item.raw)} XP` }),
+  });
+}
+
+// ---------- strava ----------
+let stravaState = { connected: false, auto: false, auto_days: 3 };
+
+function stravaLine(r) {
+  if (!stravaState.connected || r.xp == null) return '';
+  const link = r.strava_id ? ` <a href="https://www.strava.com/activities/${r.strava_id}" target="_blank" rel="noopener">View on Strava</a>` : '';
+  const status = { posted: 'XP and Drops added to Strava.', already_there: 'Strava already has XP and Drops for this ride.',
+    not_found: 'Waiting for this ride to appear on Strava.', error: 'Posting to Strava failed; it will retry.' }[r.strava_status];
+  const done = r.strava_status === 'posted' || r.strava_status === 'already_there';
+  return `<p class="note">${status ?? 'Not on Strava yet.'}${link}
+    ${done ? '' : ` <button class="btn" id="postStrava">Add to Strava</button>`} <span class="muted" id="stravaInfo"></span></p>`;
+}
+
+async function loadStrava() {
+  try { stravaState = await fetch('/api/strava').then(x => x.json()); } catch { /* keep defaults */ }
+  renderStrava();
+}
+
+function renderStrava() {
+  const s = stravaState;
+  document.getElementById('stravaConnected').hidden = !s.connected;
+  document.getElementById('stravaForm').hidden = s.connected;
+  document.getElementById('stravaAuto').checked = s.auto;
+  document.getElementById('stravaAutoLabel').textContent = `Add XP and Drops to new Zwift rides on Strava (rides from the last ${s.auto_days} days)`;
+}
+
+function groupTable(id, list, keyFn, sortState, setSort, nameLabel) {
+  const groups = new Map();
+  list.forEach(r => { const k = keyFn(r); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); });
+  const rows = [...groups.entries()].map(([name, l]) => {
+    const a = aggregate(l);
+    return { name, ...a, avg_km: a.km / l.length, last: Math.max(...l.map(r => r.t)) };
+  });
+  sortableTable(document.getElementById(id), [
+    { key: 'name', label: nameLabel, left: true, cls: 'name', render: r => esc(r.name) },
+    { key: 'rides', label: 'Rides', fmt: fmt0 },
+    { key: 'avg_km', label: 'Avg km', fmt: fmt1 },
+    { key: 'xp_per_hour', label: 'XP/hr', fmt: fmt0 },
+    { key: 'xp_per_km', label: 'XP/km', fmt: fmt1 },
+    { key: 'drops_per_hour', label: 'Drops/hr', fmt: fmt0 },
+    { key: 'drops_per_km', label: 'Drops/km', fmt: fmt0 },
+    { key: 'last', label: 'Last ridden', render: r => shortDay.format(new Date(r.last)) },
+  ], rows, sortState, setSort);
+}
+
+function renderRoutes(list) {
+  groupTable('routeTable', list, r => (r.route || 'Unknown route') + (r.world ? ' · ' + r.world : ''), state.routeSort,
+    s => { state.routeSort = s; renderRoutes(filtered()); }, 'Route');
+  groupTable('kindTable', list, r => r.kind || 'Unknown', state.kindSort,
+    s => { state.kindSort = s; renderRoutes(filtered()); }, 'Ride type');
+}
+
+// ---------- progress ----------
+function lineChart(id, list, values, colorVar, tooltipLabel) {
+  const color = css(colorVar);
+  draw(id, {
+    type: 'line',
+    // No smoothing: balances jump when drops are spent, and a curve would overshoot between rides
+    data: { labels: list.map(r => shortDay.format(r.t)), datasets: [{ data: values, borderColor: color, backgroundColor: withAlpha(color, 0.12), fill: true, borderWidth: 2, pointRadius: 0, tension: 0 }] },
+    options: { ...options(fmt0, { title: items => dayFmt.format(list[items[0].dataIndex].t), label: tooltipLabel }), scales: { ...options(fmt0).scales, y: { ...options(fmt0).scales.y, beginAtZero: false } } },
+  });
+}
+function renderProgress(list) {
+  const withTotals = list.filter(r => ok(r.total_xp));
+  lineChart('totalXp', withTotals, withTotals.map(r => r.total_xp), '--xp', item => ` ${fmt0(item.raw)} XP · level ${withTotals[item.dataIndex].level}`);
+  lineChart('totalDrops', withTotals, withTotals.map(r => r.total_drops), '--drops', item => ` ${fmt0(item.raw)} drops`);
+  const withXp = list.filter(r => ok(r.xp));
+  let a = 0, b = 0;
+  draw('cumXp', cumulative(withXp, withXp.map(r => (a += r.xp)), '--xp'));
+  draw('cumDrops', cumulative(withXp, withXp.map(r => (b += r.drops)), '--drops'));
+}
+function cumulative(list, values, colorVar) {
+  const color = css(colorVar);
+  return {
+    type: 'line',
+    data: { labels: list.map(r => shortDay.format(r.t)), datasets: [{ data: values, borderColor: color, backgroundColor: withAlpha(color, 0.12), fill: true, borderWidth: 2, pointRadius: 0, tension: 0.2 }] },
+    options: options(fmt0, { title: items => dayFmt.format(list[items[0].dataIndex].t), label: item => ` ${fmt0(item.raw)} total` }),
+  };
+}
+
+// ---------- explore ----------
+const EXAMPLES = [
+  ['Best routes for drops/hr', `SELECT route, world, count(*) AS rides,\n       round(sum(drops) / sum(hours)) AS drops_per_hour,\n       round(sum(xp) / sum(km), 1) AS xp_per_km\nFROM rides\nWHERE xp IS NOT NULL\nGROUP BY ALL\nHAVING rides >= 2\nORDER BY drops_per_hour DESC`],
+  ['Weekly totals', `SELECT date_trunc('week', start_utc)::DATE AS week,\n       count(*) AS rides, round(sum(km)) AS km,\n       sum(xp) AS xp, sum(drops) AS drops,\n       round(sum(xp) / sum(hours)) AS xp_per_hour\nFROM rides\nGROUP BY ALL\nORDER BY week`],
+  ['XP sources by month', `SELECT strftime(start_utc, '%Y-%m') AS month, source, sum(xp) AS xp\nFROM xp_sources\nGROUP BY ALL\nORDER BY month, xp DESC`],
+  ['Rides by power', `SELECT start_utc, route, round(km, 1) AS km, avg_power, normalized_power,\n       round(xp_per_hour) AS xp_per_hour, round(drops_per_hour) AS drops_per_hour\nFROM rides\nWHERE avg_power IS NOT NULL\nORDER BY avg_power DESC\nLIMIT 50`],
+  ['Monthly distance (all FIT files)', `SELECT strftime(start_utc, '%Y-%m') AS month, count(*) AS rides,\n       round(sum(distance_m) / 1000) AS km, round(sum(elapsed_s) / 3600, 1) AS hours\nFROM fit_files\nGROUP BY ALL\nORDER BY month`],
+  ['Ride Ons per ride (Zwift API)', `SELECT start_utc, name, round(distance_m / 1000, 1) AS km, ride_ons, comments\nFROM zwift_activities\nORDER BY start_utc DESC\nLIMIT 100`],
+  ['Summarize rides', `SUMMARIZE rides`],
+];
+
+async function runSql() {
+  const sql = document.getElementById('sqlInput').value;
+  store.set('sql', sql);
+  const err = document.getElementById('sqlError'), info = document.getElementById('sqlInfo');
+  err.textContent = ''; info.textContent = 'Running…';
+  const started = performance.now();
+  try {
+    const res = await fetch('/api/sql', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql }) });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error);
+    info.textContent = `${body.rows.length}${body.rows.length >= body.limit ? '+' : ''} rows in ${Math.round(performance.now() - started)} ms`;
+    renderSqlResult(body);
+  } catch (e) {
+    info.textContent = ''; err.textContent = e.message;
+  }
+}
+
+let lastSql = null;
+function renderSqlResult({ columns, rows }) {
+  lastSql = { columns, rows };
+  const table = document.getElementById('sqlTable');
+  const numeric = columns.map((_, i) => rows.length > 0 && rows.every(r => r[i] === null || typeof r[i] === 'number'));
+  table.innerHTML = '<thead><tr>' + columns.map((c, i) => `<th class="${numeric[i] ? '' : 'left'}">${esc(c)}</th>`).join('') + '</tr></thead><tbody>' +
+    (rows.length ? rows.map(r => '<tr>' + r.map((v, i) => `<td class="${numeric[i] ? '' : 'left'}">${v === null ? '<span class="muted">null</span>' : numeric[i] ? (Number.isInteger(v) ? fmt0(v) : nf1.format(v)) : esc(v)}</td>`).join('') + '</tr>').join('')
+      : `<tr><td class="empty" colspan="${columns.length || 1}">No rows.</td></tr>`) + '</tbody>';
+  const ys = numeric.map((n, i) => (n && i > 0 ? i : -1)).filter(i => i > 0);
+  const card = document.getElementById('sqlChartCard');
+  card.hidden = !(ys.length && rows.length > 1 && rows.length <= 500);
+  if (card.hidden) return;
+  const sel = document.getElementById('sqlChartY');
+  sel.innerHTML = ys.map(i => `<option value="${i}">${esc(columns[i])}</option>`).join('');
+  sel.value = String(ys[ys.length - 1]);
+  sel.onchange = () => drawSqlChart(Number(sel.value));
+  drawSqlChart(ys[ys.length - 1]);
+}
+
+function drawSqlChart(y) {
+  const { columns, rows } = lastSql;
+  draw('sqlChart', {
+    type: 'bar',
+    data: { labels: rows.map(r => String(r[0])), datasets: [barDataset(rows.map(r => r[y]), css('--xp'), columns[y])] },
+    options: options(v => fmt0(v), { label: item => ` ${columns[y]}: ${fmt1(item.raw)}` }),
+  });
+}
+
+// ---------- wiring ----------
+function renderAll() {
+  const list = filtered();
+  document.querySelectorAll('#range button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.range === state.range)));
+  document.querySelectorAll('#tabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === state.tab)));
+  document.querySelectorAll('[data-panel]').forEach(p => { p.hidden = p.dataset.panel !== state.tab; });
+  document.getElementById('filters').hidden = state.tab === 'explore' || state.tab === 'companion';
+  if (state.tab === 'overview') { renderTiles(list); renderWeekly(list); renderTrend(list); renderSources(list); }
+  if (state.tab === 'rides') { renderRideDetail(); renderRides(list); }
+  if (state.tab === 'routes') renderRoutes(list);
+  if (state.tab === 'progress') renderProgress(list);
+  if (state.tab === 'companion') renderCompanion();
+}
+
+// ---------- companion ----------
+const WORLDS = { 1: 'Watopia', 2: 'Richmond', 3: 'London', 4: 'New York', 5: 'Innsbruck', 6: 'Bologna', 7: 'Yorkshire',
+  8: 'Crit City', 9: 'Makuri Islands', 10: 'France', 11: 'Paris', 13: 'Scotland' };
+let companion = null;
+
+async function loadCompanion() {
+  companion = await fetch('/api/companion').then(x => x.json());
+}
+
+function renderCompanion() {
+  if (!companion) { loadCompanion().then(renderCompanion); return; }
+  const c = companion, p = c.profile[0];
+  document.getElementById('signin').hidden = c.signed_in;
+  document.getElementById('signedInAs').hidden = !c.signed_in;
+  document.getElementById('syncInfo').textContent = c.sync_error ? `Last sync failed: ${c.sync_error}` : '';
+  document.getElementById('signedInName').textContent = p ? `Signed in to Zwift as ${p.first_name ?? ''} ${p.last_name ?? ''}` : 'Signed in to Zwift';
+  document.getElementById('profileTiles').innerHTML = !p ? '' : [
+    ['Rider', esc(`${p.first_name ?? ''} ${p.last_name ?? ''}`), p.ftp ? `FTP ${fmt0(p.ftp)} W${p.weight_kg ? ` · ${fmt1(p.ftp / p.weight_kg)} W/kg` : ''}` : ''],
+    ['Total XP', fmt0(p.total_xp), `as of ${timeFmt.format(new Date(p.fetched_at))}`],
+    ['Drops', fmt0(p.drops), 'current balance'],
+    ['Lifetime', `${fmt0(p.total_km)} km`, `${fmt0(p.total_climb_m)} m climbed · ${fmt0(p.total_hours)} h`],
+  ].map(([label, value, sub]) => `<div class="tile"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`).join('');
+
+  const counts = Object.fromEntries(c.follows.map(f => [f.direction, f.n]));
+  document.getElementById('followCounts').textContent = p ? `${fmt0(counts.followee ?? 0)} following · ${fmt0(counts.follower ?? 0)} followers` : '';
+  document.getElementById('ridingNow').innerHTML = c.riding_now.length
+    ? c.riding_now.map(r => `<li><span>${esc(r.first_name)} ${esc(r.last_name)}</span><span class="muted">${esc(WORLDS[r.world_id] ?? '')}</span></li>`).join('')
+    : `<li class="muted">${c.signed_in ? 'Nobody you follow is riding at the last sync' : 'Not signed in'}</li>`;
+
+  document.getElementById('zwActivities').innerHTML = '<thead><tr><th class="left">Date</th><th class="left">Ride</th><th>km</th><th>Ride Ons</th></tr></thead><tbody>' +
+    c.activities.slice(0, 15).map(a => `<tr><td class="left">${a.start_utc ? shortDay.format(new Date(a.start_utc)) : ''}</td><td class="left name">${esc(a.name)}</td>
+      <td>${fmt1(a.distance_m / 1000)}</td><td>${fmt0(a.ride_ons)}</td></tr>`).join('') + '</tbody>';
+
+  const q = document.getElementById('eventSearch').value.toLowerCase();
+  const events = c.events.filter(e => !q || `${e.name} ${e.event_type} ${WORLDS[e.map_id] ?? ''}`.toLowerCase().includes(q)).slice(0, 100);
+  document.getElementById('zwEvents').innerHTML = '<thead><tr><th class="left">Starts</th><th class="left">Event</th><th class="left">Type</th><th class="left">World</th><th>Length</th></tr></thead><tbody>' +
+    (events.length ? events.map(e => {
+      const t = new Date(e.start_utc);
+      const len = e.distance_m ? `${fmt1(e.distance_m / 1000)} km` : e.duration_s ? fmtHours(e.duration_s) : e.laps ? `${e.laps} laps` : '';
+      return `<tr><td class="left">${shortDay.format(t)} ${timeFmt.format(t)}</td><td class="left name">${esc(e.name)}</td><td class="left">${esc((e.event_type ?? '').replace(/_/g, ' ').toLowerCase())}</td>
+        <td class="left">${esc(WORLDS[e.map_id] ?? '')}</td><td>${len}</td></tr>`;
+    }).join('') : `<tr><td colspan="5" class="left muted">${c.signed_in ? 'No upcoming events at the last sync' : 'Sign in to see events'}</td></tr>`) + '</tbody>';
+}
+
+function fillSelect(id, keys, value, onChange) {
+  const el = document.getElementById(id);
+  el.innerHTML = keys.map(k => `<option value="${k}">${METRICS[k].label}</option>`).join('');
+  el.value = keys.includes(value) ? value : keys[0];
+  el.addEventListener('change', () => onChange(el.value));
+  return el.value;
+}
+
+let seenImports = null;
+function showStatus(st) {
+  seenImports = st.imports;
+  const updated = st.last_import ? ` · updated ${new Date(st.last_import).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : '';
+  document.getElementById('statusLine').textContent =
+    `${fmt0(st.rides_with_xp)} rides with XP · ${fmt0(st.rides)} total${updated}`;
+}
+
+// The server re-imports when Zwift writes new logs or rides; reload when it has
+setInterval(async () => {
+  if (document.hidden) return;
+  try {
+    const st = await fetch('/api/status').then(x => x.json());
+    if (seenImports !== null && st.imports !== seenImports) { companion = null; await load(); }
+  } catch { /* server stopped; try again next tick */ }
+}, 20000);
+
+async function load() {
+  const [r, s, st] = await Promise.all(['/api/rides', '/api/xp_sources', '/api/status'].map(u => fetch(u).then(x => x.json())));
+  rides = r.map(x => ({ ...x, t: new Date(x.start_utc) }));
+  sources = s;
+  showStatus(st);
+  loadStrava();
+  const kinds = [...new Set(rides.map(x => x.kind || 'Unknown'))].sort();
+  const kindSel = document.getElementById('kind');
+  kindSel.innerHTML = '<option value="">All ride types</option>' + kinds.map(k => `<option>${esc(k)}</option>`).join('');
+  kindSel.value = kinds.includes(state.kind) ? state.kind : '';
+  renderAll();
+}
+
+state.weeklyMetric = fillSelect('weeklyMetric', WEEKLY_METRICS, state.weeklyMetric, v => { state.weeklyMetric = v; store.set('weeklyMetric', v); renderWeekly(filtered()); });
+state.trendMetric = fillSelect('trendMetric', TREND_METRICS, state.trendMetric, v => { state.trendMetric = v; store.set('trendMetric', v); renderTrend(filtered()); });
+document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => { state.tab = b.dataset.tab; store.set('tab', state.tab); renderAll(); }));
+document.querySelectorAll('#range button').forEach(b => b.addEventListener('click', () => { state.range = b.dataset.range; store.set('range', state.range); renderAll(); }));
+document.getElementById('kind').addEventListener('change', e => { state.kind = e.target.value; renderAll(); });
+document.getElementById('search').addEventListener('input', e => { state.search = e.target.value; renderAll(); });
+document.getElementById('xpOnly').addEventListener('change', e => { state.xpOnly = e.target.checked; renderAll(); });
+document.getElementById('importBtn').addEventListener('click', async e => {
+  e.target.disabled = true; e.target.textContent = 'Importing…';
+  try { await fetch('/api/import', { method: 'POST' }); await load(); } finally { e.target.disabled = false; e.target.textContent = 'Import now'; }
+});
+document.getElementById('eventSearch').addEventListener('input', renderCompanion);
+document.getElementById('stravaAuto').addEventListener('change', async e => {
+  await fetch('/api/strava/auto', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: e.target.checked }) });
+  loadStrava();
+});
+document.getElementById('stravaDisconnect').addEventListener('click', async () => {
+  await fetch('/api/strava/disconnect', { method: 'POST' }); loadStrava();
+});
+document.getElementById('stravaForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const info = document.getElementById('stravaConnectInfo');
+  info.textContent = 'Opening Strava in your browser…';
+  try {
+    const res = await fetch('/api/strava/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: document.getElementById('stravaClientId').value.trim(), clientSecret: document.getElementById('stravaSecret').value.trim() }) });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error);
+    info.textContent = 'Approve access in your browser, then come back here.';
+    document.getElementById('stravaSecret').value = '';
+    // The approval lands in the background; check for it for a few minutes
+    for (let i = 0; i < 60 && !stravaState.connected; i++) { await new Promise(r => setTimeout(r, 5000)); await loadStrava(); }
+  } catch (x) { info.textContent = x.message; }
+});
+document.getElementById('signinForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const btn = document.getElementById('signinBtn'), err = document.getElementById('signinError');
+  const pw = document.getElementById('zwPassword');
+  btn.disabled = true; btn.textContent = 'Signing in…'; err.textContent = '';
+  try {
+    const res = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: document.getElementById('zwEmail').value, password: pw.value }) });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error);
+    pw.value = '';
+    if (body.sync_error) err.textContent = `Signed in, but the first sync failed: ${body.sync_error}`;
+    companion = null; await load();
+  } catch (x) { err.textContent = x.message; }
+  finally { btn.disabled = false; btn.textContent = 'Sign in'; }
+});
+document.getElementById('signoutBtn').addEventListener('click', async () => {
+  await fetch('/api/logout', { method: 'POST' });
+  companion = null; await load();
+});
+document.getElementById('syncBtn').addEventListener('click', async e => {
+  const info = document.getElementById('syncInfo');
+  e.target.disabled = true; info.textContent = 'Syncing…';
+  try {
+    const res = await fetch('/api/sync', { method: 'POST' });
+    const body = await res.json();
+    info.textContent = res.ok ? '' : body.error;
+    if (res.ok) { companion = null; await load(); }
+  } finally { e.target.disabled = false; }
+});
+document.getElementById('examples').innerHTML = EXAMPLES.map(([label], i) => `<button class="btn" data-i="${i}">${esc(label)}</button>`).join('');
+document.querySelectorAll('#examples button').forEach(b => b.addEventListener('click', () => { document.getElementById('sqlInput').value = EXAMPLES[b.dataset.i][1]; runSql(); }));
+document.getElementById('sqlInput').value = store.get('sql', EXAMPLES[0][1]);
+document.getElementById('runSql').addEventListener('click', runSql);
+document.getElementById('sqlInput').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) runSql(); });
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', renderAll);
+load().catch(e => { document.querySelector('main').insertAdjacentHTML('beforeend', `<div class="card error">Could not load data: ${esc(e.message)}</div>`); });
+</script>
+</body>
+</html>
