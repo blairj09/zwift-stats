@@ -52,7 +52,7 @@ Signing in sends your password to Zwift's sign-in server once and saves only the
 
 On the **Companion** tab, connect Strava and each new ride's Strava description gets a block with its XP and Drops (and 🏆 for a new best per hour), the same block the earlier `zwift-stats` tool wrote. If that tool was already connected, Zwift Stats uses its Strava settings in `~/.config/zwift-stats` and needs no setup. Otherwise create a Strava API app at strava.com/settings/api with Authorization Callback Domain `localhost` and enter its Client ID and Secret; approval opens in your browser and returns to a one-off listener on localhost:8888.
 
-With **Add XP and Drops to new Zwift rides** turned on (it starts off, since the earlier tool may already be posting), rides from the last 3 days are posted automatically while the app is open (it catches up when you open it, and retries until Strava has Zwift's upload). Older rides, and rides from other devices with estimated XP and Drops (marked ≈), can be added from their ride page. A ride whose description already has the block is left alone.
+With **Add XP and Drops to new Zwift rides** turned on (it starts off), rides from the last 3 days are posted automatically while the app is open (it catches up when you open it, and retries until Strava has Zwift's upload). Older rides, and rides from other devices with estimated XP and Drops (marked ≈), can be added from their ride page. A ride whose description already has the block is left alone.
 
 ## Where the data comes from
 
