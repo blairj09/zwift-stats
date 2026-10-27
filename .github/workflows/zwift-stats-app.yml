@@ -1,0 +1,64 @@
+# Builds Zwift Stats.app as one download that runs on Apple silicon and Intel Macs.
+# A pushed v* tag publishes it as a GitHub Release; pull requests that touch the app build it
+# as a workflow artifact so the packaging stays tested.
+name: Zwift Stats app
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths: ["zwift-hub/**", ".github/workflows/zwift-stats-app.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: zwift-hub
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add the Intel target
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            zwift-hub/target
+          key: app-${{ hashFiles('zwift-hub/Cargo.lock') }}
+
+      - name: Test
+        run: cargo test
+
+      - name: Build both architectures
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          mkdir -p target/universal
+          lipo -create -output target/universal/zwift-hub \
+            target/aarch64-apple-darwin/release/zwift-hub \
+            target/x86_64-apple-darwin/release/zwift-hub
+
+      - name: Bundle the app
+        run: |
+          ZH_BINARY=target/universal/zwift-hub ZH_NO_INSTALL=1 ./macos/build-app.sh
+          cd target/release
+          ditto -c -k --keepParent "Zwift Stats.app" Zwift-Stats-macOS.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Zwift-Stats-macOS
+          path: zwift-hub/target/release/Zwift-Stats-macOS.zip
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" target/release/Zwift-Stats-macOS.zip \
+            --title "Zwift Stats $GITHUB_REF_NAME" --notes-file macos/RELEASE_NOTES.md

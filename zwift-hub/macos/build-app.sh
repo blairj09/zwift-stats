@@ -1,5 +1,7 @@
 #!/bin/bash
 # Builds "Zwift Stats.app" and copies it to ~/Applications (or the folder given as $1).
+# For releases: ZH_BINARY=<prebuilt binary> uses that binary instead of building, and
+# ZH_NO_INSTALL=1 leaves the app in target/release without installing it.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -7,11 +9,15 @@ dest="${1:-$HOME/Applications}"
 app="target/release/Zwift Stats.app"
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 
-cargo build --release
+binary="${ZH_BINARY:-}"
+if [ -z "$binary" ]; then
+  cargo build --release
+  binary=target/release/zwift-hub
+fi
 
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp target/release/zwift-hub "$app/Contents/MacOS/zwift-hub"
+cp "$binary" "$app/Contents/MacOS/zwift-hub"
 
 # Icon: every size macOS asks for, from the 1024px source
 iconset=$(mktemp -d)/AppIcon.iconset
@@ -46,6 +52,11 @@ PLIST
 # Ad-hoc signature: enough for a Mac to run an app built on it, and gives macOS a stable
 # identity to remember the Documents permission by
 codesign --force --deep --sign - "$app"
+
+if [ -n "${ZH_NO_INSTALL:-}" ]; then
+  echo "Built $app"
+  exit 0
+fi
 
 mkdir -p "$dest"
 # The app was called Zwift Hub before; drop that copy so only one is installed
