@@ -4,6 +4,12 @@ A Mac app that shows how much XP and how many Drops every Zwift ride earned you:
 
 Zwift doesn't put XP or Drops in its FIT files or its API, so Zwift Stats reads them from the log file Zwift writes on your Mac (`~/Documents/Zwift/Logs`). Everything stays on your computer in a local DuckDB database.
 
+![Zwift Stats overview: XP and Drops totals and rates, and XP per week](docs/screenshots/overview.png)
+
+![The Rides tab: XP, Drops and their per-hour and per-km rates for every ride](docs/screenshots/rides.png)
+
+<sub>Screenshots use sample data.</sub>
+
 ## Install
 
 1. Download **Zwift-Stats-macOS.zip** from the [latest release](https://github.com/blairj09/zwift-stats/releases/latest).
