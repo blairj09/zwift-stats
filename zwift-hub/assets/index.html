@@ -180,6 +180,18 @@
       <p class="note">Weeks start Monday. Week rates are week totals over week time or distance.</p>
     </div>
     <div class="card">
+      <div class="card-head"><h2>Does going faster pay?</h2><span class="muted">Each dot is a ride; the line is the trend. Click a dot to open the ride.</span></div>
+      <div class="grid2">
+        <div class="chart-wrap"><canvas id="speedXp"></canvas></div>
+        <div class="chart-wrap"><canvas id="speedDrops"></canvas></div>
+      </div>
+      <p class="note" id="speedSlopes"></p>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Per hour, week by week</h2><span class="muted">Each line against its own average for the period: 100 is your normal</span></div>
+      <div class="chart-wrap"><canvas id="perHourChart"></canvas></div>
+    </div>
+    <div class="card">
       <div class="card-head"><h2 id="trendTitle">Per ride</h2><select id="trendMetric" aria-label="Per-ride metric"></select></div>
       <div class="chart-wrap"><canvas id="trendChart"></canvas></div>
     </div>
@@ -461,6 +473,89 @@ function renderWeekly(list) {
   });
 }
 
+/** Least-squares line through the points, or null when there's no spread in x. */
+function trendLine(xs, ys) {
+  const n = xs.length; if (n < 2) return null;
+  const mx = xs.reduce((a, b) => a + b, 0) / n, my = ys.reduce((a, b) => a + b, 0) / n;
+  let sxy = 0, sxx = 0;
+  xs.forEach((x, i) => { sxy += (x - mx) * (ys[i] - my); sxx += (x - mx) ** 2; });
+  return sxx ? { m: sxy / sxx, b: my - (sxy / sxx) * mx } : null;
+}
+
+function renderSpeed(list) {
+  const pts = list.filter(r => r.kmh > 0 && ok(r.xp_per_hour) && ok(r.drops_per_hour));
+  const xs = pts.map(r => r.kmh);
+  const lo = xs.length ? Math.floor(Math.min(...xs)) - 1 : 0, hi = xs.length ? Math.ceil(Math.max(...xs)) + 1 : 40;
+  const fits = {};
+  [['speedXp', 'xp_per_hour'], ['speedDrops', 'drops_per_hour']].forEach(([id, key]) => {
+    const m = METRICS[key], color = css(m.color), fit = trendLine(xs, pts.map(r => r[key]));
+    fits[key] = fit;
+    const base = options(fmt0, {
+      title: items => rideName(pts[items[0].dataIndex]) + ' · ' + dayFmt.format(pts[items[0].dataIndex].t),
+      label: item => ` ${fmt1(item.raw.x)} km/h · ${fmt0(item.raw.y)} ${m.label.toLowerCase()}`,
+    });
+    base.interaction = { mode: 'nearest', intersect: true };
+    base.plugins.tooltip.filter = item => item.datasetIndex === 0;
+    base.scales = {
+      x: { type: 'linear', min: lo, max: hi, grid: { color: css('--grid') }, border: { display: false },
+        title: { display: true, text: 'Average speed (km/h)', color: css('--text-secondary') } },
+      y: { ...base.scales.y, beginAtZero: false, title: { display: true, text: m.label, color: css('--text-secondary') } },
+    };
+    base.onClick = (_, els) => {
+      const el = els.find(e => e.datasetIndex === 0);
+      if (!el) return;
+      state.selected = pts[el.index].start_utc; state.tab = 'rides'; store.set('tab', 'rides');
+      renderAll(); window.scrollTo({ top: 0 });
+    };
+    base.onHover = (e, els) => { e.native.target.style.cursor = els.some(x => x.datasetIndex === 0) ? 'pointer' : ''; };
+    draw(id, {
+      type: 'scatter',
+      data: { datasets: [
+        { data: pts.map(r => ({ x: r.kmh, y: r[key] })), pointRadius: 4, pointHoverRadius: 6,
+          pointBackgroundColor: withAlpha(color, 0.45), pointBorderColor: css('--surface-1'), pointBorderWidth: 1.5 },
+        ...(fit ? [{ type: 'line', data: [{ x: lo, y: fit.m * lo + fit.b }, { x: hi, y: fit.m * hi + fit.b }],
+          borderColor: color, borderWidth: 2, pointRadius: 0, pointHoverRadius: 0 }] : []),
+      ] },
+      options: base,
+    });
+  });
+  const per = (f, unit) => `${fmt0(Math.abs(f.m))} ${f.m >= 0 ? 'more' : 'fewer'} ${unit}`;
+  document.getElementById('speedSlopes').textContent = fits.xp_per_hour && fits.drops_per_hour && pts.length >= 5
+    ? `Across these ${pts.length} rides, each extra 1 km/h came with about ${per(fits.xp_per_hour, 'XP')} and ${per(fits.drops_per_hour, 'Drops')} per hour. ` +
+      'XP mostly follows distance, so it rises with speed; Drops pay much more for climbing, so slow climbing rides can earn the most Drops per hour.'
+    : 'A trend needs at least 5 rides with XP and speed in this range.';
+}
+
+function renderPerHour(list) {
+  const SERIES = ['kmh', 'xp_per_hour', 'drops_per_hour'];
+  const groups = new Map();
+  if (list.length) for (let w = weekStart(list[0].t); w <= list[list.length - 1].t; w.setDate(w.getDate() + 7)) groups.set(w.getTime(), []);
+  list.forEach(r => groups.get(weekStart(r.t).getTime()).push(r));
+  const weeks = [...groups.entries()].map(([t, l]) => ({ t, n: l.length, ...(l.length ? aggregate(l) : {}) }));
+  const avg = Object.fromEntries(SERIES.map(k => {
+    const v = weeks.map(w => w[k]).filter(ok);
+    return [k, v.length ? v.reduce((a, b) => a + b, 0) / v.length : null];
+  }));
+  const base = options(fmt0, {
+    legend: true,
+    title: items => { const w = weeks[items[0].dataIndex]; return `Week of ${dayFmt.format(new Date(w.t))} · ${w.n} ride${w.n === 1 ? '' : 's'}`; },
+    label: item => { const k = SERIES[item.datasetIndex], m = METRICS[k]; return ` ${m.label}: ${m.fmt(weeks[item.dataIndex][k])} (${fmt0(item.raw)})`; },
+  });
+  base.scales.y = { ...base.scales.y, beginAtZero: false, title: { display: true, text: '100 = your average', color: css('--text-secondary') } };
+  draw('perHourChart', {
+    type: 'line',
+    data: {
+      labels: weeks.map(w => shortDay.format(new Date(w.t))),
+      datasets: SERIES.map(k => ({
+        label: METRICS[k].label, data: weeks.map(w => (ok(w[k]) && avg[k] ? (w[k] / avg[k]) * 100 : null)),
+        borderColor: css(METRICS[k].color), backgroundColor: css(METRICS[k].color),
+        borderWidth: 2, pointRadius: 3, pointHoverRadius: 5, tension: 0.25, spanGaps: true,
+      })),
+    },
+    options: base,
+  });
+}
+
 function renderTrend(list) {
   const key = state.trendMetric, m = METRICS[key];
   document.getElementById('trendTitle').textContent = m.label + ' per ride';
@@ -729,7 +824,7 @@ function renderAll() {
   document.querySelectorAll('#tabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === state.tab)));
   document.querySelectorAll('[data-panel]').forEach(p => { p.hidden = p.dataset.panel !== state.tab; });
   document.getElementById('filters').hidden = state.tab === 'explore' || state.tab === 'companion';
-  if (state.tab === 'overview') { renderTiles(list); renderWeekly(list); renderTrend(list); renderSources(list); }
+  if (state.tab === 'overview') { renderTiles(list); renderWeekly(list); renderSpeed(list); renderPerHour(list); renderTrend(list); renderSources(list); }
   if (state.tab === 'rides') { renderRideDetail(); renderRides(list); }
   if (state.tab === 'routes') renderRoutes(list);
   if (state.tab === 'progress') renderProgress(list);
