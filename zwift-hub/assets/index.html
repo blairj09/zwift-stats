@@ -96,7 +96,7 @@
     #signinForm { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
     #signinForm input { flex: 1 1 200px; max-width: 280px; }
 
-    .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .tiles { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
     @media (max-width: 800px) { .tiles { grid-template-columns: repeat(2, 1fr); } }
     .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
     .tile .label { font-size: 0.78rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.06em; display: flex; align-items: center; gap: 6px; }
@@ -338,13 +338,14 @@ const METRICS = {
   drops:          { label: 'Drops',           color: '--drops',    fmt: fmt0 },
   km:             { label: 'Distance (km)',   color: '--distance', fmt: fmt1 },
   hours:          { label: 'Time (hours)',    color: '--time',     fmt: fmt1 },
+  kmh:            { label: 'Avg speed (km/h)', color: '--distance', fmt: fmt1 },
   xp_per_hour:    { label: 'XP per hour',     color: '--xp',       fmt: fmt0 },
   xp_per_km:      { label: 'XP per km',       color: '--xp',       fmt: fmt1 },
   drops_per_hour: { label: 'Drops per hour',  color: '--drops',    fmt: fmt0 },
   drops_per_km:   { label: 'Drops per km',    color: '--drops',    fmt: fmt0 },
 };
-const WEEKLY_METRICS = ['xp', 'drops', 'km', 'hours', 'xp_per_hour', 'xp_per_km', 'drops_per_hour', 'drops_per_km'];
-const TREND_METRICS = ['xp_per_hour', 'xp_per_km', 'drops_per_hour', 'drops_per_km', 'xp', 'drops', 'km'];
+const WEEKLY_METRICS = ['xp', 'drops', 'km', 'hours', 'kmh', 'xp_per_hour', 'xp_per_km', 'drops_per_hour', 'drops_per_km'];
+const TREND_METRICS = ['xp_per_hour', 'xp_per_km', 'drops_per_hour', 'drops_per_km', 'xp', 'drops', 'km', 'kmh'];
 
 function weekStart(d) {
   const x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x;
@@ -355,6 +356,8 @@ function aggregate(list) {
   const sum = (l, f) => l.reduce((s, r) => s + (f(r) || 0), 0);
   const withXp = list.filter(r => ok(r.xp));
   const timed = withXp.filter(r => r.hours > 0), dist = withXp.filter(r => r.km > 0);
+  // Speed over moving time, like each ride's own; any ride counts, XP or not
+  const moving = list.filter(r => r.km > 0 && r.kmh > 0);
   return {
     rides: list.length,
     xp: withXp.length ? sum(withXp, r => r.xp) : null,
@@ -365,6 +368,7 @@ function aggregate(list) {
     drops_per_hour: sum(timed, r => r.hours) ? sum(timed, r => r.drops) / sum(timed, r => r.hours) : null,
     xp_per_km: sum(dist, r => r.km) ? sum(dist, r => r.xp) / sum(dist, r => r.km) : null,
     drops_per_km: sum(dist, r => r.km) ? sum(dist, r => r.drops) / sum(dist, r => r.km) : null,
+    kmh: moving.length ? sum(moving, r => r.km) / sum(moving, r => r.km / r.kmh) : null,
   };
 }
 
@@ -421,14 +425,17 @@ function renderTiles(list) {
   const tw = aggregate(list.filter(r => r.t >= tw0)), lw = aggregate(list.filter(r => r.t >= lw0 && r.t < tw0));
   const sub = (k, f) => `This week ${f(tw.rides ? tw[k] : null)} · last ${f(lw.rides ? lw[k] : null)}`;
   const tiles = [
+    // Two rows of five: XP and distance on top, Drops and time below
     ['XP', fmt0(a.xp), sub('xp', fmt0), '--xp'],
-    ['Drops', fmt0(a.drops), sub('drops', fmt0), '--drops'],
     ['XP / hour', fmt0(a.xp_per_hour), sub('xp_per_hour', fmt0), '--xp'],
     ['XP / km', fmt1(a.xp_per_km), sub('xp_per_km', fmt1), '--xp'],
+    ['Distance', fmt0(a.km) + ' km', sub('km', fmt0), '--distance'],
+    ['Avg speed', fmt1(a.kmh) + ' km/h', sub('kmh', fmt1), '--distance'],
+    ['Drops', fmt0(a.drops), sub('drops', fmt0), '--drops'],
     ['Drops / hour', fmt0(a.drops_per_hour), sub('drops_per_hour', fmt0), '--drops'],
     ['Drops / km', fmt0(a.drops_per_km), sub('drops_per_km', fmt0), '--drops'],
-    ['Distance', fmt0(a.km) + ' km', sub('km', fmt0), '--distance'],
-    ['Time', fmtHours(a.hours * 3600), `${a.rides} ride${a.rides === 1 ? '' : 's'} · ${tw.rides} this week`, '--time'],
+    ['Time', fmtHours(a.hours * 3600), sub('hours', h => fmtHours(h * 3600)), '--time'],
+    ['Rides', fmt0(a.rides), sub('rides', fmt0), '--time'],
   ];
   document.getElementById('tiles').innerHTML = tiles.map(([label, value, s, color]) => `
     <div class="tile"><div class="label"><span class="swatch" style="background:var(${color})"></span>${label}</div>
@@ -442,7 +449,7 @@ function renderWeekly(list) {
   if (list.length) for (let w = weekStart(list[0].t); w <= list[list.length - 1].t; w.setDate(w.getDate() + 7)) groups.set(w.getTime(), []);
   list.forEach(r => groups.get(weekStart(r.t).getTime()).push(r));
   const weeks = [...groups.entries()];
-  const isRate = key.includes('_per_');
+  const isRate = key.includes('_per_') || key === 'kmh';
   const values = weeks.map(([, l]) => (l.length ? aggregate(l)[key] : (isRate ? null : 0)));
   draw('weeklyChart', {
     type: 'bar',
@@ -521,6 +528,7 @@ function renderRides(list) {
     { key: 'world', label: 'World', left: true, render: r => esc(r.world || '–') },
     { key: 'km', label: 'km', fmt: fmt1 },
     { key: 'duration_s', label: 'Time', render: r => fmtHours(r.duration_s) },
+    { key: 'kmh', label: 'km/h', fmt: fmt1 },
     { key: 'elevation_m', label: 'Climb m', fmt: fmt0 },
     { key: 'avg_power', label: 'Avg W', fmt: fmt0 },
     { key: 'xp', label: 'XP', fmt: fmt0 },
@@ -544,7 +552,7 @@ function renderRideDetail() {
   const facts = [
     ['XP', fmt0(r.xp)], ['Drops', fmt0(r.drops)], ['XP / hour', fmt0(r.xp_per_hour)], ['XP / km', fmt1(r.xp_per_km)],
     ['Drops / hour', fmt0(r.drops_per_hour)], ['Drops / km', fmt0(r.drops_per_km)], ['Distance', fmt1(r.km) + ' km'],
-    ['Time', fmtHours(r.duration_s)], ['Climbing', fmt0(r.elevation_m) + ' m'], ['Avg power', ok(r.avg_power) ? fmt0(r.avg_power) + ' W' : '–'],
+    ['Time', fmtHours(r.duration_s)], ['Avg speed', ok(r.kmh) ? fmt1(r.kmh) + ' km/h' : '–'], ['Climbing', fmt0(r.elevation_m) + ' m'], ['Avg power', ok(r.avg_power) ? fmt0(r.avg_power) + ' W' : '–'],
     ['Normalized power', ok(r.normalized_power) ? fmt0(r.normalized_power) + ' W' : '–'], ['Avg HR', ok(r.avg_hr) ? fmt0(r.avg_hr) + ' bpm' : '–'],
     ['Calories', fmt0(r.calories)], ['Level after', fmt0(r.level)], ['Streak', ok(r.streak_weeks) ? r.streak_weeks + ' weeks' : '–'],
     ['Ride Ons received', fmt0(r.ride_ons_received)], ['Ride Ons given', fmt0(r.ride_ons_given)],
@@ -614,6 +622,7 @@ function groupTable(id, list, keyFn, sortState, setSort, nameLabel) {
     { key: 'name', label: nameLabel, left: true, cls: 'name', render: r => esc(r.name) },
     { key: 'rides', label: 'Rides', fmt: fmt0 },
     { key: 'avg_km', label: 'Avg km', fmt: fmt1 },
+    { key: 'kmh', label: 'km/h', fmt: fmt1 },
     { key: 'xp_per_hour', label: 'XP/hr', fmt: fmt0 },
     { key: 'xp_per_km', label: 'XP/km', fmt: fmt1 },
     { key: 'drops_per_hour', label: 'Drops/hr', fmt: fmt0 },
