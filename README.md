@@ -6,6 +6,8 @@ Zwift doesn't put XP or Drops in its FIT files or its API, so Zwift Stats reads 
 
 ![Zwift Stats overview: XP and Drops totals and rates, and XP per week](docs/screenshots/overview.png)
 
+![Speed against XP and Drops per hour for each ride, and the three per-hour rates week by week](docs/screenshots/per-hour.png)
+
 ![The Rides tab: XP, Drops and their per-hour and per-km rates for every ride](docs/screenshots/rides.png)
 
 <sub>Screenshots use sample data.</sub>
