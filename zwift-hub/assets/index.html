@@ -122,6 +122,13 @@
     th.left, td.left { text-align: left; }
     td.name { white-space: normal; min-width: 180px; }
     th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); cursor: pointer; user-select: none; position: sticky; top: 0; background: var(--surface-1); }
+    /* Grouped headers: a group label row above short column labels, both sticky */
+    thead tr.groups th { top: 0; height: 28px; cursor: default; text-align: center; border-bottom-color: var(--border); }
+    thead tr.groups + tr th { top: 28px; }
+    th.group-start, td.group-start { border-left: 1px solid var(--grid); }
+    table.compact th, table.compact td { padding: 7px 7px; }
+    .cell-sub { font-size: 0.78rem; color: var(--text-muted); margin-top: 1px; }
+    .cell-sub .tag { margin-left: 4px; }
     th[aria-sort="ascending"]::after { content: " ▲"; }
     th[aria-sort="descending"]::after { content: " ▼"; }
     tbody tr:hover { background: var(--accent-bg); }
@@ -214,7 +221,7 @@
     <div class="card" id="rideDetail" hidden></div>
     <div class="card">
       <div class="card-head"><h2>Rides</h2><span class="muted" id="rideCount"></span></div>
-      <div class="table-wrap"><table id="rideTable"></table></div>
+      <div class="table-wrap"><table id="rideTable" class="compact"></table></div>
     </div>
   </section>
 
@@ -634,13 +641,20 @@ function sortableTable(el, columns, rows, sort, onSort, { onRow, selectedKey } =
     if (y === null || y === undefined) return -1;
     return (x < y ? -1 : x > y ? 1 : 0) * sort.dir;
   });
-  el.innerHTML = '<thead><tr>' + columns.map(c =>
-    `<th data-key="${c.key}" class="${c.left ? 'left' : ''}" ${c.key === sort.key ? `aria-sort="${sort.dir > 0 ? 'ascending' : 'descending'}"` : ''}>${c.label}</th>`
+  // Columns that share a `group` get one label above them, so their own labels can stay short
+  const starts = columns.map((c, i) => !!c.group && c.group !== columns[i - 1]?.group);
+  const spans = [];
+  columns.forEach((c, i) => { if (i && (c.group || '') === (columns[i - 1].group || '')) spans[spans.length - 1].n++; else spans.push({ group: c.group, n: 1, start: starts[i] }); });
+  const groupRow = columns.some(c => c.group)
+    ? '<tr class="groups">' + spans.map(g => `<th colspan="${g.n}" class="${g.start ? 'group-start' : ''}">${g.group || ''}</th>`).join('') + '</tr>' : '';
+  const cls = (c, i) => `${c.left ? 'left' : ''} ${starts[i] ? 'group-start' : ''}`;
+  el.innerHTML = '<thead>' + groupRow + '<tr>' + columns.map((c, i) =>
+    `<th data-key="${c.key}" class="${cls(c, i)}" ${c.title ? `title="${c.title}"` : ''} ${c.key === sort.key ? `aria-sort="${sort.dir > 0 ? 'ascending' : 'descending'}"` : ''}>${c.label}</th>`
   ).join('') + '</tr></thead><tbody>' + (sorted.length ? sorted.map((r, i) =>
     `<tr data-i="${i}" class="${onRow ? 'clickable' : ''} ${selectedKey && selectedKey(r) ? 'selected' : ''}">` +
-    columns.map(c => `<td class="${c.left ? 'left' : ''} ${c.cls || ''}">${c.render ? c.render(r) : c.fmt(r[c.key])}</td>`).join('') + '</tr>'
+    columns.map((c, j) => `<td class="${cls(c, j)} ${c.cls || ''}">${c.render ? c.render(r) : c.fmt(r[c.key])}</td>`).join('') + '</tr>'
   ).join('') : `<tr><td colspan="${columns.length}" class="empty">No rides match.</td></tr>`) + '</tbody>';
-  el.querySelectorAll('th').forEach(th => th.addEventListener('click', () => {
+  el.querySelectorAll('th[data-key]').forEach(th => th.addEventListener('click', () => {
     const key = th.dataset.key;
     onSort(sort.key === key ? { key, dir: -sort.dir } : { key, dir: columns.find(c => c.key === key).left ? 1 : -1 });
   }));
@@ -648,25 +662,29 @@ function sortableTable(el, columns, rows, sort, onSort, { onRow, selectedKey } =
 }
 
 const rideName = r => r.route || r.title || 'Ride';
+const compactYear = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: '2-digit' });
+// The year only when it isn't this one
+const compactDay = t => (t.getFullYear() === new Date().getFullYear() ? shortDay : compactYear).format(t);
 function renderRides(list) {
   document.getElementById('rideCount').textContent = `${list.length} ride${list.length === 1 ? '' : 's'}`;
   sortableTable(document.getElementById('rideTable'), [
-    { key: 't', label: 'Date', render: r => dayFmt.format(r.t) },
-    { key: 'route', label: 'Route', left: true, cls: 'name', render: r => esc(rideName(r)) + (r.kind ? `<span class="tag">${esc(r.kind)}</span>` : '') },
-    { key: 'world', label: 'World', left: true, render: r => esc(r.world || '–') },
-    { key: 'km', label: 'km', fmt: fmt1 },
-    { key: 'duration_s', label: 'Time', render: r => fmtHours(r.duration_s) },
-    { key: 'kmh', label: 'km/h', fmt: fmt1 },
-    { key: 'elevation_m', label: 'Climb m', fmt: fmt0 },
-    { key: 'avg_power', label: 'Avg W', fmt: fmt0 },
-    { key: 'xp', label: 'XP', fmt: fmt0 },
-    { key: 'xp_per_hour', label: 'XP/hr', fmt: fmt0 },
-    { key: 'xp_per_km', label: 'XP/km', fmt: fmt1 },
-    { key: 'drops', label: 'Drops', fmt: fmt0 },
-    { key: 'drops_per_hour', label: 'Drops/hr', fmt: fmt0 },
-    { key: 'drops_per_km', label: 'Drops/km', fmt: fmt0 },
-    { key: 'xp_per_wh', label: 'XP/Wh', fmt: fmt1 },
-    { key: 'drops_per_wh', label: 'Drops/Wh', fmt: fmt0 },
+    { key: 't', label: 'Date', render: r => compactDay(r.t) },
+    // World and ride type sit under the route name rather than in columns of their own
+    { key: 'route', label: 'Route', left: true, cls: 'name', render: r => esc(rideName(r)) +
+      `<div class="cell-sub">${esc(r.world || '')}${r.kind ? `<span class="tag">${esc(r.kind)}</span>` : ''}</div>` },
+    { key: 'km', label: 'km', group: 'Ride', fmt: fmt1 },
+    { key: 'duration_s', label: 'Time', group: 'Ride', render: r => fmtHours(r.duration_s) },
+    { key: 'kmh', label: 'km/h', group: 'Ride', fmt: fmt1 },
+    { key: 'elevation_m', label: 'Climb', title: 'Climbing (m)', group: 'Ride', fmt: fmt0 },
+    { key: 'avg_power', label: 'W', title: 'Average power (W)', group: 'Ride', fmt: fmt0 },
+    { key: 'xp', label: 'Total', group: 'XP', fmt: fmt0 },
+    { key: 'xp_per_hour', label: '/hr', title: 'XP per hour', group: 'XP', fmt: fmt0 },
+    { key: 'xp_per_km', label: '/km', title: 'XP per km', group: 'XP', fmt: fmt1 },
+    { key: 'xp_per_wh', label: '/Wh', title: 'XP per watt-hour', group: 'XP', fmt: fmt1 },
+    { key: 'drops', label: 'Total', group: 'Drops', fmt: fmt0 },
+    { key: 'drops_per_hour', label: '/hr', title: 'Drops per hour', group: 'Drops', fmt: fmt0 },
+    { key: 'drops_per_km', label: '/km', title: 'Drops per km', group: 'Drops', fmt: fmt0 },
+    { key: 'drops_per_wh', label: '/Wh', title: 'Drops per watt-hour', group: 'Drops', fmt: fmt0 },
   ], list, state.rideSort, s => { state.rideSort = s; renderRides(filtered()); }, {
     onRow: r => { state.selected = r.start_utc; renderRideDetail(); renderRides(filtered()); window.scrollTo({ top: 0, behavior: 'smooth' }); },
     selectedKey: r => r.start_utc === state.selected,
