@@ -96,7 +96,7 @@
     #signinForm { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
     #signinForm input { flex: 1 1 200px; max-width: 280px; }
 
-    .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .tiles { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
     @media (max-width: 800px) { .tiles { grid-template-columns: repeat(2, 1fr); } }
     .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
     .tile .label { font-size: 0.78rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.06em; display: flex; align-items: center; gap: 6px; }
@@ -122,6 +122,13 @@
     th.left, td.left { text-align: left; }
     td.name { white-space: normal; min-width: 180px; }
     th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); cursor: pointer; user-select: none; position: sticky; top: 0; background: var(--surface-1); }
+    /* Grouped headers: a group label row above short column labels, both sticky */
+    thead tr.groups th { top: 0; height: 28px; cursor: default; text-align: center; border-bottom-color: var(--border); }
+    thead tr.groups + tr th { top: 28px; }
+    th.group-start, td.group-start { border-left: 1px solid var(--grid); }
+    table.compact th, table.compact td { padding: 7px 7px; }
+    .cell-sub { font-size: 0.78rem; color: var(--text-muted); margin-top: 1px; }
+    .cell-sub .tag { margin-left: 4px; }
     th[aria-sort="ascending"]::after { content: " ▲"; }
     th[aria-sort="descending"]::after { content: " ▼"; }
     tbody tr:hover { background: var(--accent-bg); }
@@ -180,6 +187,26 @@
       <p class="note">Weeks start Monday. Week rates are week totals over week time or distance.</p>
     </div>
     <div class="card">
+      <div class="card-head"><h2>Does going faster pay?</h2><span class="muted">Each dot is a ride; the line is the trend. Click a dot to open the ride.</span></div>
+      <div class="grid2">
+        <div class="chart-wrap"><canvas id="speedXp"></canvas></div>
+        <div class="chart-wrap"><canvas id="speedDrops"></canvas></div>
+      </div>
+      <p class="note" id="speedSlopes"></p>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Does pushing harder pay?</h2><span class="muted">Earnings per watt-hour of effort against average power. Click a dot to open the ride.</span></div>
+      <div class="grid2">
+        <div class="chart-wrap"><canvas id="powerXp"></canvas></div>
+        <div class="chart-wrap"><canvas id="powerDrops"></canvas></div>
+      </div>
+      <p class="note" id="powerSlopes"></p>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Per hour, week by week</h2><span class="muted">Each line against its own average for the period: 100 is your normal</span></div>
+      <div class="chart-wrap"><canvas id="perHourChart"></canvas></div>
+    </div>
+    <div class="card">
       <div class="card-head"><h2 id="trendTitle">Per ride</h2><select id="trendMetric" aria-label="Per-ride metric"></select></div>
       <div class="chart-wrap"><canvas id="trendChart"></canvas></div>
     </div>
@@ -194,7 +221,7 @@
     <div class="card" id="rideDetail" hidden></div>
     <div class="card">
       <div class="card-head"><h2>Rides</h2><span class="muted" id="rideCount"></span></div>
-      <div class="table-wrap"><table id="rideTable"></table></div>
+      <div class="table-wrap"><table id="rideTable" class="compact"></table></div>
     </div>
   </section>
 
@@ -338,13 +365,16 @@ const METRICS = {
   drops:          { label: 'Drops',           color: '--drops',    fmt: fmt0 },
   km:             { label: 'Distance (km)',   color: '--distance', fmt: fmt1 },
   hours:          { label: 'Time (hours)',    color: '--time',     fmt: fmt1 },
+  kmh:            { label: 'Avg speed (km/h)', color: '--distance', fmt: fmt1 },
   xp_per_hour:    { label: 'XP per hour',     color: '--xp',       fmt: fmt0 },
   xp_per_km:      { label: 'XP per km',       color: '--xp',       fmt: fmt1 },
   drops_per_hour: { label: 'Drops per hour',  color: '--drops',    fmt: fmt0 },
   drops_per_km:   { label: 'Drops per km',    color: '--drops',    fmt: fmt0 },
+  xp_per_wh:      { label: 'XP per Wh',       color: '--xp',       fmt: fmt1 },
+  drops_per_wh:   { label: 'Drops per Wh',    color: '--drops',    fmt: fmt0 },
 };
-const WEEKLY_METRICS = ['xp', 'drops', 'km', 'hours', 'xp_per_hour', 'xp_per_km', 'drops_per_hour', 'drops_per_km'];
-const TREND_METRICS = ['xp_per_hour', 'xp_per_km', 'drops_per_hour', 'drops_per_km', 'xp', 'drops', 'km'];
+const WEEKLY_METRICS = ['xp', 'drops', 'km', 'hours', 'kmh', 'xp_per_hour', 'xp_per_km', 'drops_per_hour', 'drops_per_km', 'xp_per_wh', 'drops_per_wh'];
+const TREND_METRICS = ['xp_per_hour', 'xp_per_km', 'drops_per_hour', 'drops_per_km', 'xp_per_wh', 'drops_per_wh', 'xp', 'drops', 'km', 'kmh'];
 
 function weekStart(d) {
   const x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x;
@@ -355,6 +385,9 @@ function aggregate(list) {
   const sum = (l, f) => l.reduce((s, r) => s + (f(r) || 0), 0);
   const withXp = list.filter(r => ok(r.xp));
   const timed = withXp.filter(r => r.hours > 0), dist = withXp.filter(r => r.km > 0);
+  // Speed over moving time, like each ride's own; any ride counts, XP or not
+  const moving = list.filter(r => r.km > 0 && r.kmh > 0);
+  const powered = withXp.filter(r => r.wh > 0);
   return {
     rides: list.length,
     xp: withXp.length ? sum(withXp, r => r.xp) : null,
@@ -365,6 +398,9 @@ function aggregate(list) {
     drops_per_hour: sum(timed, r => r.hours) ? sum(timed, r => r.drops) / sum(timed, r => r.hours) : null,
     xp_per_km: sum(dist, r => r.km) ? sum(dist, r => r.xp) / sum(dist, r => r.km) : null,
     drops_per_km: sum(dist, r => r.km) ? sum(dist, r => r.drops) / sum(dist, r => r.km) : null,
+    kmh: moving.length ? sum(moving, r => r.km) / sum(moving, r => r.km / r.kmh) : null,
+    xp_per_wh: sum(powered, r => r.wh) ? sum(powered, r => r.xp) / sum(powered, r => r.wh) : null,
+    drops_per_wh: sum(powered, r => r.wh) ? sum(powered, r => r.drops) / sum(powered, r => r.wh) : null,
   };
 }
 
@@ -421,14 +457,17 @@ function renderTiles(list) {
   const tw = aggregate(list.filter(r => r.t >= tw0)), lw = aggregate(list.filter(r => r.t >= lw0 && r.t < tw0));
   const sub = (k, f) => `This week ${f(tw.rides ? tw[k] : null)} · last ${f(lw.rides ? lw[k] : null)}`;
   const tiles = [
+    // Two rows of five: XP and distance on top, Drops and time below
     ['XP', fmt0(a.xp), sub('xp', fmt0), '--xp'],
-    ['Drops', fmt0(a.drops), sub('drops', fmt0), '--drops'],
     ['XP / hour', fmt0(a.xp_per_hour), sub('xp_per_hour', fmt0), '--xp'],
     ['XP / km', fmt1(a.xp_per_km), sub('xp_per_km', fmt1), '--xp'],
+    ['Distance', fmt0(a.km) + ' km', sub('km', fmt0), '--distance'],
+    ['Avg speed', fmt1(a.kmh) + ' km/h', sub('kmh', fmt1), '--distance'],
+    ['Drops', fmt0(a.drops), sub('drops', fmt0), '--drops'],
     ['Drops / hour', fmt0(a.drops_per_hour), sub('drops_per_hour', fmt0), '--drops'],
     ['Drops / km', fmt0(a.drops_per_km), sub('drops_per_km', fmt0), '--drops'],
-    ['Distance', fmt0(a.km) + ' km', sub('km', fmt0), '--distance'],
-    ['Time', fmtHours(a.hours * 3600), `${a.rides} ride${a.rides === 1 ? '' : 's'} · ${tw.rides} this week`, '--time'],
+    ['Time', fmtHours(a.hours * 3600), sub('hours', h => fmtHours(h * 3600)), '--time'],
+    ['Rides', fmt0(a.rides), sub('rides', fmt0), '--time'],
   ];
   document.getElementById('tiles').innerHTML = tiles.map(([label, value, s, color]) => `
     <div class="tile"><div class="label"><span class="swatch" style="background:var(${color})"></span>${label}</div>
@@ -442,7 +481,7 @@ function renderWeekly(list) {
   if (list.length) for (let w = weekStart(list[0].t); w <= list[list.length - 1].t; w.setDate(w.getDate() + 7)) groups.set(w.getTime(), []);
   list.forEach(r => groups.get(weekStart(r.t).getTime()).push(r));
   const weeks = [...groups.entries()];
-  const isRate = key.includes('_per_');
+  const isRate = key.includes('_per_') || key === 'kmh';
   const values = weeks.map(([, l]) => (l.length ? aggregate(l)[key] : (isRate ? null : 0)));
   draw('weeklyChart', {
     type: 'bar',
@@ -451,6 +490,109 @@ function renderWeekly(list) {
       title: items => 'Week of ' + dayFmt.format(new Date(weeks[items[0].dataIndex][0])),
       label: item => { const n = weeks[item.dataIndex][1].length; return ` ${m.label}: ${m.fmt(item.raw)} (${n} ride${n === 1 ? '' : 's'})`; },
     }),
+  });
+}
+
+/** Least-squares line through the points, or null when there's no spread in x. */
+function trendLine(xs, ys) {
+  const n = xs.length; if (n < 2) return null;
+  const mx = xs.reduce((a, b) => a + b, 0) / n, my = ys.reduce((a, b) => a + b, 0) / n;
+  let sxy = 0, sxx = 0;
+  xs.forEach((x, i) => { sxy += (x - mx) * (ys[i] - my); sxx += (x - mx) ** 2; });
+  return sxx ? { m: sxy / sxx, b: my - (sxy / sxx) * mx } : null;
+}
+
+/** Two scatters sharing an x axis, each with its trend line; returns the fitted lines by y key. */
+function scatterPair(pts, xKey, xFmt, xTitle, pad, pairs) {
+  const xs = pts.map(r => r[xKey]);
+  // Padded out to the next multiple of pad, so the axis ends on round numbers
+  const lo = xs.length ? Math.floor(Math.min(...xs) / pad - 1) * pad : 0, hi = xs.length ? Math.ceil(Math.max(...xs) / pad + 1) * pad : 40;
+  const fits = {};
+  pairs.forEach(([id, key]) => {
+    const m = METRICS[key], color = css(m.color), fit = trendLine(xs, pts.map(r => r[key]));
+    fits[key] = fit;
+    const base = options(m.fmt, {
+      title: items => rideName(pts[items[0].dataIndex]) + ' · ' + dayFmt.format(pts[items[0].dataIndex].t),
+      label: item => ` ${xFmt(item.raw.x)} · ${m.fmt(item.raw.y)} ${m.label.toLowerCase()}`,
+    });
+    base.interaction = { mode: 'nearest', intersect: true };
+    base.plugins.tooltip.filter = item => item.datasetIndex === 0;
+    base.scales = {
+      x: { type: 'linear', min: lo, max: hi, grid: { color: css('--grid') }, border: { display: false },
+        title: { display: true, text: xTitle, color: css('--text-secondary') } },
+      y: { ...base.scales.y, beginAtZero: false, title: { display: true, text: m.label, color: css('--text-secondary') } },
+    };
+    base.onClick = (_, els) => {
+      const el = els.find(e => e.datasetIndex === 0);
+      if (!el) return;
+      state.selected = pts[el.index].start_utc; state.tab = 'rides'; store.set('tab', 'rides');
+      renderAll(); window.scrollTo({ top: 0 });
+    };
+    base.onHover = (e, els) => { e.native.target.style.cursor = els.some(x => x.datasetIndex === 0) ? 'pointer' : ''; };
+    draw(id, {
+      type: 'scatter',
+      data: { datasets: [
+        { data: pts.map(r => ({ x: r[xKey], y: r[key] })), pointRadius: 4, pointHoverRadius: 6,
+          pointBackgroundColor: withAlpha(color, 0.45), pointBorderColor: css('--surface-1'), pointBorderWidth: 1.5 },
+        ...(fit ? [{ type: 'line', data: [{ x: lo, y: fit.m * lo + fit.b }, { x: hi, y: fit.m * hi + fit.b }],
+          borderColor: color, borderWidth: 2, pointRadius: 0, pointHoverRadius: 0 }] : []),
+      ] },
+      options: base,
+    });
+  });
+  return fits;
+}
+
+function renderSpeed(list) {
+  const pts = list.filter(r => r.kmh > 0 && ok(r.xp_per_hour) && ok(r.drops_per_hour));
+  const fits = scatterPair(pts, 'kmh', x => fmt1(x) + ' km/h', 'Average speed (km/h)', 1,
+    [['speedXp', 'xp_per_hour'], ['speedDrops', 'drops_per_hour']]);
+  const per = (f, unit) => `${fmt0(Math.abs(f.m))} ${f.m >= 0 ? 'more' : 'fewer'} ${unit}`;
+  document.getElementById('speedSlopes').textContent = fits.xp_per_hour && fits.drops_per_hour && pts.length >= 5
+    ? `Across these ${pts.length} rides, each extra 1 km/h came with about ${per(fits.xp_per_hour, 'XP')} and ${per(fits.drops_per_hour, 'Drops')} per hour. ` +
+      'XP mostly follows distance, so it rises with speed; Drops pay much more for climbing, so slow climbing rides can earn the most Drops per hour.'
+    : 'A trend needs at least 5 rides with XP and speed in this range.';
+}
+
+function renderPower(list) {
+  const pts = list.filter(r => r.avg_power > 0 && ok(r.xp_per_wh) && ok(r.drops_per_wh));
+  const fits = scatterPair(pts, 'avg_power', x => fmt0(x) + ' W', 'Average power (W)', 10,
+    [['powerXp', 'xp_per_wh'], ['powerDrops', 'drops_per_wh']]);
+  // Per 10 W, as 1 W moves the rates too little to read
+  const per = (f, unit, fmt) => `${fmt(Math.abs(f.m * 10))} ${f.m >= 0 ? 'more' : 'fewer'} ${unit}`;
+  document.getElementById('powerSlopes').textContent = fits.xp_per_wh && fits.drops_per_wh && pts.length >= 5
+    ? `Across these ${pts.length} rides, each extra 10 W came with about ${per(fits.xp_per_wh, 'XP', fmt1)} and ${per(fits.drops_per_wh, 'Drops', fmt0)} per watt-hour. ` +
+      'Energy is average power over moving time. XP follows distance and Drops follow climbing, not watts, so easier rides tend to earn the most per watt-hour; the route matters more than the effort.'
+    : 'A trend needs at least 5 rides with XP and power in this range.';
+}
+
+function renderPerHour(list) {
+  const SERIES = ['kmh', 'xp_per_hour', 'drops_per_hour'];
+  const groups = new Map();
+  if (list.length) for (let w = weekStart(list[0].t); w <= list[list.length - 1].t; w.setDate(w.getDate() + 7)) groups.set(w.getTime(), []);
+  list.forEach(r => groups.get(weekStart(r.t).getTime()).push(r));
+  const weeks = [...groups.entries()].map(([t, l]) => ({ t, n: l.length, ...(l.length ? aggregate(l) : {}) }));
+  const avg = Object.fromEntries(SERIES.map(k => {
+    const v = weeks.map(w => w[k]).filter(ok);
+    return [k, v.length ? v.reduce((a, b) => a + b, 0) / v.length : null];
+  }));
+  const base = options(fmt0, {
+    legend: true,
+    title: items => { const w = weeks[items[0].dataIndex]; return `Week of ${dayFmt.format(new Date(w.t))} · ${w.n} ride${w.n === 1 ? '' : 's'}`; },
+    label: item => { const k = SERIES[item.datasetIndex], m = METRICS[k]; return ` ${m.label}: ${m.fmt(weeks[item.dataIndex][k])} (${fmt0(item.raw)})`; },
+  });
+  base.scales.y = { ...base.scales.y, beginAtZero: false, title: { display: true, text: '100 = your average', color: css('--text-secondary') } };
+  draw('perHourChart', {
+    type: 'line',
+    data: {
+      labels: weeks.map(w => shortDay.format(new Date(w.t))),
+      datasets: SERIES.map(k => ({
+        label: METRICS[k].label, data: weeks.map(w => (ok(w[k]) && avg[k] ? (w[k] / avg[k]) * 100 : null)),
+        borderColor: css(METRICS[k].color), backgroundColor: css(METRICS[k].color),
+        borderWidth: 2, pointRadius: 3, pointHoverRadius: 5, tension: 0.25, spanGaps: true,
+      })),
+    },
+    options: base,
   });
 }
 
@@ -499,13 +641,20 @@ function sortableTable(el, columns, rows, sort, onSort, { onRow, selectedKey } =
     if (y === null || y === undefined) return -1;
     return (x < y ? -1 : x > y ? 1 : 0) * sort.dir;
   });
-  el.innerHTML = '<thead><tr>' + columns.map(c =>
-    `<th data-key="${c.key}" class="${c.left ? 'left' : ''}" ${c.key === sort.key ? `aria-sort="${sort.dir > 0 ? 'ascending' : 'descending'}"` : ''}>${c.label}</th>`
+  // Columns that share a `group` get one label above them, so their own labels can stay short
+  const starts = columns.map((c, i) => !!c.group && c.group !== columns[i - 1]?.group);
+  const spans = [];
+  columns.forEach((c, i) => { if (i && (c.group || '') === (columns[i - 1].group || '')) spans[spans.length - 1].n++; else spans.push({ group: c.group, n: 1, start: starts[i] }); });
+  const groupRow = columns.some(c => c.group)
+    ? '<tr class="groups">' + spans.map(g => `<th colspan="${g.n}" class="${g.start ? 'group-start' : ''}">${g.group || ''}</th>`).join('') + '</tr>' : '';
+  const cls = (c, i) => `${c.left ? 'left' : ''} ${starts[i] ? 'group-start' : ''}`;
+  el.innerHTML = '<thead>' + groupRow + '<tr>' + columns.map((c, i) =>
+    `<th data-key="${c.key}" class="${cls(c, i)}" ${c.title ? `title="${c.title}"` : ''} ${c.key === sort.key ? `aria-sort="${sort.dir > 0 ? 'ascending' : 'descending'}"` : ''}>${c.label}</th>`
   ).join('') + '</tr></thead><tbody>' + (sorted.length ? sorted.map((r, i) =>
     `<tr data-i="${i}" class="${onRow ? 'clickable' : ''} ${selectedKey && selectedKey(r) ? 'selected' : ''}">` +
-    columns.map(c => `<td class="${c.left ? 'left' : ''} ${c.cls || ''}">${c.render ? c.render(r) : c.fmt(r[c.key])}</td>`).join('') + '</tr>'
+    columns.map((c, j) => `<td class="${cls(c, j)} ${c.cls || ''}">${c.render ? c.render(r) : c.fmt(r[c.key])}</td>`).join('') + '</tr>'
   ).join('') : `<tr><td colspan="${columns.length}" class="empty">No rides match.</td></tr>`) + '</tbody>';
-  el.querySelectorAll('th').forEach(th => th.addEventListener('click', () => {
+  el.querySelectorAll('th[data-key]').forEach(th => th.addEventListener('click', () => {
     const key = th.dataset.key;
     onSort(sort.key === key ? { key, dir: -sort.dir } : { key, dir: columns.find(c => c.key === key).left ? 1 : -1 });
   }));
@@ -513,22 +662,29 @@ function sortableTable(el, columns, rows, sort, onSort, { onRow, selectedKey } =
 }
 
 const rideName = r => r.route || r.title || 'Ride';
+const compactYear = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: '2-digit' });
+// The year only when it isn't this one
+const compactDay = t => (t.getFullYear() === new Date().getFullYear() ? shortDay : compactYear).format(t);
 function renderRides(list) {
   document.getElementById('rideCount').textContent = `${list.length} ride${list.length === 1 ? '' : 's'}`;
   sortableTable(document.getElementById('rideTable'), [
-    { key: 't', label: 'Date', render: r => dayFmt.format(r.t) },
-    { key: 'route', label: 'Route', left: true, cls: 'name', render: r => esc(rideName(r)) + (r.kind ? `<span class="tag">${esc(r.kind)}</span>` : '') },
-    { key: 'world', label: 'World', left: true, render: r => esc(r.world || '–') },
-    { key: 'km', label: 'km', fmt: fmt1 },
-    { key: 'duration_s', label: 'Time', render: r => fmtHours(r.duration_s) },
-    { key: 'elevation_m', label: 'Climb m', fmt: fmt0 },
-    { key: 'avg_power', label: 'Avg W', fmt: fmt0 },
-    { key: 'xp', label: 'XP', fmt: fmt0 },
-    { key: 'xp_per_hour', label: 'XP/hr', fmt: fmt0 },
-    { key: 'xp_per_km', label: 'XP/km', fmt: fmt1 },
-    { key: 'drops', label: 'Drops', fmt: fmt0 },
-    { key: 'drops_per_hour', label: 'Drops/hr', fmt: fmt0 },
-    { key: 'drops_per_km', label: 'Drops/km', fmt: fmt0 },
+    { key: 't', label: 'Date', render: r => compactDay(r.t) },
+    // World and ride type sit under the route name rather than in columns of their own
+    { key: 'route', label: 'Route', left: true, cls: 'name', render: r => esc(rideName(r)) +
+      `<div class="cell-sub">${esc(r.world || '')}${r.kind ? `<span class="tag">${esc(r.kind)}</span>` : ''}</div>` },
+    { key: 'km', label: 'km', group: 'Ride', fmt: fmt1 },
+    { key: 'duration_s', label: 'Time', group: 'Ride', render: r => fmtHours(r.duration_s) },
+    { key: 'kmh', label: 'km/h', group: 'Ride', fmt: fmt1 },
+    { key: 'elevation_m', label: 'Climb', title: 'Climbing (m)', group: 'Ride', fmt: fmt0 },
+    { key: 'avg_power', label: 'W', title: 'Average power (W)', group: 'Ride', fmt: fmt0 },
+    { key: 'xp', label: 'Total', group: 'XP', fmt: fmt0 },
+    { key: 'xp_per_hour', label: '/hr', title: 'XP per hour', group: 'XP', fmt: fmt0 },
+    { key: 'xp_per_km', label: '/km', title: 'XP per km', group: 'XP', fmt: fmt1 },
+    { key: 'xp_per_wh', label: '/Wh', title: 'XP per watt-hour', group: 'XP', fmt: fmt1 },
+    { key: 'drops', label: 'Total', group: 'Drops', fmt: fmt0 },
+    { key: 'drops_per_hour', label: '/hr', title: 'Drops per hour', group: 'Drops', fmt: fmt0 },
+    { key: 'drops_per_km', label: '/km', title: 'Drops per km', group: 'Drops', fmt: fmt0 },
+    { key: 'drops_per_wh', label: '/Wh', title: 'Drops per watt-hour', group: 'Drops', fmt: fmt0 },
   ], list, state.rideSort, s => { state.rideSort = s; renderRides(filtered()); }, {
     onRow: r => { state.selected = r.start_utc; renderRideDetail(); renderRides(filtered()); window.scrollTo({ top: 0, behavior: 'smooth' }); },
     selectedKey: r => r.start_utc === state.selected,
@@ -544,7 +700,8 @@ function renderRideDetail() {
   const facts = [
     ['XP', fmt0(r.xp)], ['Drops', fmt0(r.drops)], ['XP / hour', fmt0(r.xp_per_hour)], ['XP / km', fmt1(r.xp_per_km)],
     ['Drops / hour', fmt0(r.drops_per_hour)], ['Drops / km', fmt0(r.drops_per_km)], ['Distance', fmt1(r.km) + ' km'],
-    ['Time', fmtHours(r.duration_s)], ['Climbing', fmt0(r.elevation_m) + ' m'], ['Avg power', ok(r.avg_power) ? fmt0(r.avg_power) + ' W' : '–'],
+    ['Time', fmtHours(r.duration_s)], ['Avg speed', ok(r.kmh) ? fmt1(r.kmh) + ' km/h' : '–'], ['Climbing', fmt0(r.elevation_m) + ' m'], ['Avg power', ok(r.avg_power) ? fmt0(r.avg_power) + ' W' : '–'],
+    ['Energy', ok(r.wh) ? fmt0(r.wh) + ' Wh' : '–'], ['XP / Wh', fmt1(r.xp_per_wh)], ['Drops / Wh', fmt0(r.drops_per_wh)],
     ['Normalized power', ok(r.normalized_power) ? fmt0(r.normalized_power) + ' W' : '–'], ['Avg HR', ok(r.avg_hr) ? fmt0(r.avg_hr) + ' bpm' : '–'],
     ['Calories', fmt0(r.calories)], ['Level after', fmt0(r.level)], ['Streak', ok(r.streak_weeks) ? r.streak_weeks + ' weeks' : '–'],
     ['Ride Ons received', fmt0(r.ride_ons_received)], ['Ride Ons given', fmt0(r.ride_ons_given)],
@@ -614,10 +771,13 @@ function groupTable(id, list, keyFn, sortState, setSort, nameLabel) {
     { key: 'name', label: nameLabel, left: true, cls: 'name', render: r => esc(r.name) },
     { key: 'rides', label: 'Rides', fmt: fmt0 },
     { key: 'avg_km', label: 'Avg km', fmt: fmt1 },
+    { key: 'kmh', label: 'km/h', fmt: fmt1 },
     { key: 'xp_per_hour', label: 'XP/hr', fmt: fmt0 },
     { key: 'xp_per_km', label: 'XP/km', fmt: fmt1 },
     { key: 'drops_per_hour', label: 'Drops/hr', fmt: fmt0 },
     { key: 'drops_per_km', label: 'Drops/km', fmt: fmt0 },
+    { key: 'xp_per_wh', label: 'XP/Wh', fmt: fmt1 },
+    { key: 'drops_per_wh', label: 'Drops/Wh', fmt: fmt0 },
     { key: 'last', label: 'Last ridden', render: r => shortDay.format(new Date(r.last)) },
   ], rows, sortState, setSort);
 }
@@ -720,7 +880,7 @@ function renderAll() {
   document.querySelectorAll('#tabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === state.tab)));
   document.querySelectorAll('[data-panel]').forEach(p => { p.hidden = p.dataset.panel !== state.tab; });
   document.getElementById('filters').hidden = state.tab === 'explore' || state.tab === 'companion';
-  if (state.tab === 'overview') { renderTiles(list); renderWeekly(list); renderTrend(list); renderSources(list); }
+  if (state.tab === 'overview') { renderTiles(list); renderWeekly(list); renderSpeed(list); renderPower(list); renderPerHour(list); renderTrend(list); renderSources(list); }
   if (state.tab === 'rides') { renderRideDetail(); renderRides(list); }
   if (state.tab === 'routes') renderRoutes(list);
   if (state.tab === 'progress') renderProgress(list);

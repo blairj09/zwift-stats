@@ -214,7 +214,13 @@ SELECT *,
     drops / nullif(duration_s / 3600, 0)                   AS drops_per_hour,
     xp    / nullif(distance_m / 1000, 0)                   AS xp_per_km,
     drops / nullif(distance_m / 1000, 0)                   AS drops_per_km,
-    drops / nullif(elevation_m, 0)                         AS drops_per_m_climbed
+    drops / nullif(elevation_m, 0)                         AS drops_per_m_climbed,
+    -- Moving time when the FIT file has it, as Zwift's own average speed leaves out pauses
+    distance_m / nullif(coalesce(moving_s, duration_s), 0) * 3.6 AS kmh,
+    -- Energy put out (watt-hours), from average power over the same moving time
+    avg_power * coalesce(moving_s, duration_s) / 3600     AS wh,
+    xp    / nullif(avg_power * coalesce(moving_s, duration_s) / 3600, 0) AS xp_per_wh,
+    drops / nullif(avg_power * coalesce(moving_s, duration_s) / 3600, 0) AS drops_per_wh
 FROM all_rides
 WHERE duration_s >= 60 OR xp > 0
 "#;
