@@ -188,6 +188,14 @@
       <p class="note" id="speedSlopes"></p>
     </div>
     <div class="card">
+      <div class="card-head"><h2>Does pushing harder pay?</h2><span class="muted">Earnings per watt-hour of effort against average power. Click a dot to open the ride.</span></div>
+      <div class="grid2">
+        <div class="chart-wrap"><canvas id="powerXp"></canvas></div>
+        <div class="chart-wrap"><canvas id="powerDrops"></canvas></div>
+      </div>
+      <p class="note" id="powerSlopes"></p>
+    </div>
+    <div class="card">
       <div class="card-head"><h2>Per hour, week by week</h2><span class="muted">Each line against its own average for the period: 100 is your normal</span></div>
       <div class="chart-wrap"><canvas id="perHourChart"></canvas></div>
     </div>
@@ -355,9 +363,11 @@ const METRICS = {
   xp_per_km:      { label: 'XP per km',       color: '--xp',       fmt: fmt1 },
   drops_per_hour: { label: 'Drops per hour',  color: '--drops',    fmt: fmt0 },
   drops_per_km:   { label: 'Drops per km',    color: '--drops',    fmt: fmt0 },
+  xp_per_wh:      { label: 'XP per Wh',       color: '--xp',       fmt: fmt1 },
+  drops_per_wh:   { label: 'Drops per Wh',    color: '--drops',    fmt: fmt0 },
 };
-const WEEKLY_METRICS = ['xp', 'drops', 'km', 'hours', 'kmh', 'xp_per_hour', 'xp_per_km', 'drops_per_hour', 'drops_per_km'];
-const TREND_METRICS = ['xp_per_hour', 'xp_per_km', 'drops_per_hour', 'drops_per_km', 'xp', 'drops', 'km', 'kmh'];
+const WEEKLY_METRICS = ['xp', 'drops', 'km', 'hours', 'kmh', 'xp_per_hour', 'xp_per_km', 'drops_per_hour', 'drops_per_km', 'xp_per_wh', 'drops_per_wh'];
+const TREND_METRICS = ['xp_per_hour', 'xp_per_km', 'drops_per_hour', 'drops_per_km', 'xp_per_wh', 'drops_per_wh', 'xp', 'drops', 'km', 'kmh'];
 
 function weekStart(d) {
   const x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x;
@@ -370,6 +380,7 @@ function aggregate(list) {
   const timed = withXp.filter(r => r.hours > 0), dist = withXp.filter(r => r.km > 0);
   // Speed over moving time, like each ride's own; any ride counts, XP or not
   const moving = list.filter(r => r.km > 0 && r.kmh > 0);
+  const powered = withXp.filter(r => r.wh > 0);
   return {
     rides: list.length,
     xp: withXp.length ? sum(withXp, r => r.xp) : null,
@@ -381,6 +392,8 @@ function aggregate(list) {
     xp_per_km: sum(dist, r => r.km) ? sum(dist, r => r.xp) / sum(dist, r => r.km) : null,
     drops_per_km: sum(dist, r => r.km) ? sum(dist, r => r.drops) / sum(dist, r => r.km) : null,
     kmh: moving.length ? sum(moving, r => r.km) / sum(moving, r => r.km / r.kmh) : null,
+    xp_per_wh: sum(powered, r => r.wh) ? sum(powered, r => r.xp) / sum(powered, r => r.wh) : null,
+    drops_per_wh: sum(powered, r => r.wh) ? sum(powered, r => r.drops) / sum(powered, r => r.wh) : null,
   };
 }
 
@@ -482,23 +495,24 @@ function trendLine(xs, ys) {
   return sxx ? { m: sxy / sxx, b: my - (sxy / sxx) * mx } : null;
 }
 
-function renderSpeed(list) {
-  const pts = list.filter(r => r.kmh > 0 && ok(r.xp_per_hour) && ok(r.drops_per_hour));
-  const xs = pts.map(r => r.kmh);
-  const lo = xs.length ? Math.floor(Math.min(...xs)) - 1 : 0, hi = xs.length ? Math.ceil(Math.max(...xs)) + 1 : 40;
+/** Two scatters sharing an x axis, each with its trend line; returns the fitted lines by y key. */
+function scatterPair(pts, xKey, xFmt, xTitle, pad, pairs) {
+  const xs = pts.map(r => r[xKey]);
+  // Padded out to the next multiple of pad, so the axis ends on round numbers
+  const lo = xs.length ? Math.floor(Math.min(...xs) / pad - 1) * pad : 0, hi = xs.length ? Math.ceil(Math.max(...xs) / pad + 1) * pad : 40;
   const fits = {};
-  [['speedXp', 'xp_per_hour'], ['speedDrops', 'drops_per_hour']].forEach(([id, key]) => {
+  pairs.forEach(([id, key]) => {
     const m = METRICS[key], color = css(m.color), fit = trendLine(xs, pts.map(r => r[key]));
     fits[key] = fit;
-    const base = options(fmt0, {
+    const base = options(m.fmt, {
       title: items => rideName(pts[items[0].dataIndex]) + ' · ' + dayFmt.format(pts[items[0].dataIndex].t),
-      label: item => ` ${fmt1(item.raw.x)} km/h · ${fmt0(item.raw.y)} ${m.label.toLowerCase()}`,
+      label: item => ` ${xFmt(item.raw.x)} · ${m.fmt(item.raw.y)} ${m.label.toLowerCase()}`,
     });
     base.interaction = { mode: 'nearest', intersect: true };
     base.plugins.tooltip.filter = item => item.datasetIndex === 0;
     base.scales = {
       x: { type: 'linear', min: lo, max: hi, grid: { color: css('--grid') }, border: { display: false },
-        title: { display: true, text: 'Average speed (km/h)', color: css('--text-secondary') } },
+        title: { display: true, text: xTitle, color: css('--text-secondary') } },
       y: { ...base.scales.y, beginAtZero: false, title: { display: true, text: m.label, color: css('--text-secondary') } },
     };
     base.onClick = (_, els) => {
@@ -511,7 +525,7 @@ function renderSpeed(list) {
     draw(id, {
       type: 'scatter',
       data: { datasets: [
-        { data: pts.map(r => ({ x: r.kmh, y: r[key] })), pointRadius: 4, pointHoverRadius: 6,
+        { data: pts.map(r => ({ x: r[xKey], y: r[key] })), pointRadius: 4, pointHoverRadius: 6,
           pointBackgroundColor: withAlpha(color, 0.45), pointBorderColor: css('--surface-1'), pointBorderWidth: 1.5 },
         ...(fit ? [{ type: 'line', data: [{ x: lo, y: fit.m * lo + fit.b }, { x: hi, y: fit.m * hi + fit.b }],
           borderColor: color, borderWidth: 2, pointRadius: 0, pointHoverRadius: 0 }] : []),
@@ -519,11 +533,30 @@ function renderSpeed(list) {
       options: base,
     });
   });
+  return fits;
+}
+
+function renderSpeed(list) {
+  const pts = list.filter(r => r.kmh > 0 && ok(r.xp_per_hour) && ok(r.drops_per_hour));
+  const fits = scatterPair(pts, 'kmh', x => fmt1(x) + ' km/h', 'Average speed (km/h)', 1,
+    [['speedXp', 'xp_per_hour'], ['speedDrops', 'drops_per_hour']]);
   const per = (f, unit) => `${fmt0(Math.abs(f.m))} ${f.m >= 0 ? 'more' : 'fewer'} ${unit}`;
   document.getElementById('speedSlopes').textContent = fits.xp_per_hour && fits.drops_per_hour && pts.length >= 5
     ? `Across these ${pts.length} rides, each extra 1 km/h came with about ${per(fits.xp_per_hour, 'XP')} and ${per(fits.drops_per_hour, 'Drops')} per hour. ` +
       'XP mostly follows distance, so it rises with speed; Drops pay much more for climbing, so slow climbing rides can earn the most Drops per hour.'
     : 'A trend needs at least 5 rides with XP and speed in this range.';
+}
+
+function renderPower(list) {
+  const pts = list.filter(r => r.avg_power > 0 && ok(r.xp_per_wh) && ok(r.drops_per_wh));
+  const fits = scatterPair(pts, 'avg_power', x => fmt0(x) + ' W', 'Average power (W)', 10,
+    [['powerXp', 'xp_per_wh'], ['powerDrops', 'drops_per_wh']]);
+  // Per 10 W, as 1 W moves the rates too little to read
+  const per = (f, unit, fmt) => `${fmt(Math.abs(f.m * 10))} ${f.m >= 0 ? 'more' : 'fewer'} ${unit}`;
+  document.getElementById('powerSlopes').textContent = fits.xp_per_wh && fits.drops_per_wh && pts.length >= 5
+    ? `Across these ${pts.length} rides, each extra 10 W came with about ${per(fits.xp_per_wh, 'XP', fmt1)} and ${per(fits.drops_per_wh, 'Drops', fmt0)} per watt-hour. ` +
+      'Energy is average power over moving time. XP follows distance and Drops follow climbing, not watts, so easier rides tend to earn the most per watt-hour; the route matters more than the effort.'
+    : 'A trend needs at least 5 rides with XP and power in this range.';
 }
 
 function renderPerHour(list) {
@@ -632,6 +665,8 @@ function renderRides(list) {
     { key: 'drops', label: 'Drops', fmt: fmt0 },
     { key: 'drops_per_hour', label: 'Drops/hr', fmt: fmt0 },
     { key: 'drops_per_km', label: 'Drops/km', fmt: fmt0 },
+    { key: 'xp_per_wh', label: 'XP/Wh', fmt: fmt1 },
+    { key: 'drops_per_wh', label: 'Drops/Wh', fmt: fmt0 },
   ], list, state.rideSort, s => { state.rideSort = s; renderRides(filtered()); }, {
     onRow: r => { state.selected = r.start_utc; renderRideDetail(); renderRides(filtered()); window.scrollTo({ top: 0, behavior: 'smooth' }); },
     selectedKey: r => r.start_utc === state.selected,
@@ -648,6 +683,7 @@ function renderRideDetail() {
     ['XP', fmt0(r.xp)], ['Drops', fmt0(r.drops)], ['XP / hour', fmt0(r.xp_per_hour)], ['XP / km', fmt1(r.xp_per_km)],
     ['Drops / hour', fmt0(r.drops_per_hour)], ['Drops / km', fmt0(r.drops_per_km)], ['Distance', fmt1(r.km) + ' km'],
     ['Time', fmtHours(r.duration_s)], ['Avg speed', ok(r.kmh) ? fmt1(r.kmh) + ' km/h' : '–'], ['Climbing', fmt0(r.elevation_m) + ' m'], ['Avg power', ok(r.avg_power) ? fmt0(r.avg_power) + ' W' : '–'],
+    ['Energy', ok(r.wh) ? fmt0(r.wh) + ' Wh' : '–'], ['XP / Wh', fmt1(r.xp_per_wh)], ['Drops / Wh', fmt0(r.drops_per_wh)],
     ['Normalized power', ok(r.normalized_power) ? fmt0(r.normalized_power) + ' W' : '–'], ['Avg HR', ok(r.avg_hr) ? fmt0(r.avg_hr) + ' bpm' : '–'],
     ['Calories', fmt0(r.calories)], ['Level after', fmt0(r.level)], ['Streak', ok(r.streak_weeks) ? r.streak_weeks + ' weeks' : '–'],
     ['Ride Ons received', fmt0(r.ride_ons_received)], ['Ride Ons given', fmt0(r.ride_ons_given)],
@@ -722,6 +758,8 @@ function groupTable(id, list, keyFn, sortState, setSort, nameLabel) {
     { key: 'xp_per_km', label: 'XP/km', fmt: fmt1 },
     { key: 'drops_per_hour', label: 'Drops/hr', fmt: fmt0 },
     { key: 'drops_per_km', label: 'Drops/km', fmt: fmt0 },
+    { key: 'xp_per_wh', label: 'XP/Wh', fmt: fmt1 },
+    { key: 'drops_per_wh', label: 'Drops/Wh', fmt: fmt0 },
     { key: 'last', label: 'Last ridden', render: r => shortDay.format(new Date(r.last)) },
   ], rows, sortState, setSort);
 }
@@ -824,7 +862,7 @@ function renderAll() {
   document.querySelectorAll('#tabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === state.tab)));
   document.querySelectorAll('[data-panel]').forEach(p => { p.hidden = p.dataset.panel !== state.tab; });
   document.getElementById('filters').hidden = state.tab === 'explore' || state.tab === 'companion';
-  if (state.tab === 'overview') { renderTiles(list); renderWeekly(list); renderSpeed(list); renderPerHour(list); renderTrend(list); renderSources(list); }
+  if (state.tab === 'overview') { renderTiles(list); renderWeekly(list); renderSpeed(list); renderPower(list); renderPerHour(list); renderTrend(list); renderSources(list); }
   if (state.tab === 'rides') { renderRideDetail(); renderRides(list); }
   if (state.tab === 'routes') renderRoutes(list);
   if (state.tab === 'progress') renderProgress(list);

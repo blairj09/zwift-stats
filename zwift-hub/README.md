@@ -89,7 +89,7 @@ Global options: `--db <file>` (default `~/Library/Application Support/zwift-hub/
 
 ## Tables
 
-- `rides` (view): one row per ride across all sources, with `xp_per_hour`, `xp_per_km`, `drops_per_hour`, `drops_per_km`, `drops_per_m_climbed` and `earnings_source` (`log`, `legacy` or `fit` when no XP is known)
+- `rides` (view): one row per ride across all sources, with `xp_per_hour`, `xp_per_km`, `drops_per_hour`, `drops_per_km`, `drops_per_m_climbed`, `kmh`, `wh` (energy in watt-hours), `xp_per_wh`, `drops_per_wh` and `earnings_source` (`log`, `legacy` or `fit` when no XP is known)
 - `activities`: one row per activity parsed from the game log
 - `xp_sources`: XP per activity per grant type
 - `fit_files`: session summary of every FIT file
